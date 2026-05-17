@@ -1,0 +1,176 @@
+{
+  "schemaVersion": "1.0.0",
+  "meta": {
+    "profileId": "nestors-kuliks",
+    "label": "Nestors Kuliks",
+    "createdAt": "2026-05-17T00:00:00.000Z",
+    "updatedAt": "2026-05-17T00:00:00.000Z",
+    "locale": "en-US",
+    "defaultCountry": "LV"
+  },
+  "personal": {
+    "firstName": "Nestors",
+    "lastName": "Kuliks",
+    "email": "nestor.kulik@gmail.com",
+    "phone": "+37127093577",
+    "links": {
+      "linkedin": "https://linkedin.com/in/nestor-kulik",
+      "portfolio": "https://nestorskuliks.xyz"
+    }
+  },
+  "workExperience": [
+    {
+      "id": "exp_selected_agency_sia",
+      "company": "Selected Agency SIA",
+      "title": "Solo UX/UI Designer",
+      "startDate": "2026-01",
+      "endDate": "2026-05",
+      "current": false,
+      "description": "Created wireframes and prototypes for design communication and improved user experience. Collaborated with stakeholders to align goals, adapt to feedback, and balance business and user needs. Identified improvement opportunities, managed time, and learned new technologies. Designed and developed responsive websites with cross-browser compatibility and performance considerations."
+    },
+    {
+      "id": "exp_ennova_aps",
+      "company": "Ennova ApS",
+      "title": "Design System Engineer",
+      "startDate": "2025-01",
+      "endDate": "2025-05",
+      "current": false,
+      "description": "Developed and implemented scalable design systems across complex e-commerce and B2B platforms. Built reusable components adopted by multiple internal teams. Created and enforced design system standards, tokens, naming conventions, coding best practices, documentation, onboarding resources, and component library governance."
+    },
+    {
+      "id": "exp_university_projects",
+      "company": "University Projects",
+      "title": "Project Lead",
+      "startDate": "2023-08",
+      "endDate": "2025-06",
+      "current": false,
+      "description": "Led school and university projects, including an Erasmus global mobility MVP Unity mobile game with geo-tracking in a team of five. Led junior designers toward industry-standard project work. Participated in local design and photography competitions and developed projects beyond education requirements."
+    },
+    {
+      "id": "exp_accenture",
+      "company": "Accenture",
+      "title": "UX/UI Designer",
+      "startDate": "2023-02",
+      "endDate": "2023-09",
+      "current": false,
+      "description": "Conducted UX research and redesigned user journeys including checkout flows, complex data-entry forms, and account management. Synthesized complex information into intuitive, accessible, user-centric interfaces. Delivered functional web designs prioritizing usability, accessibility, and user needs across diverse product offerings."
+    }
+  ],
+  "education": [
+    {
+      "id": "edu_iba_multimedia_design",
+      "institution": "IBA Kolding",
+      "degree": "Multimedia Design",
+      "startDate": "2025",
+      "endDate": "2025"
+    },
+    {
+      "id": "edu_iba_economics_marketing",
+      "institution": "IBA Kolding",
+      "degree": "Economics and Marketing",
+      "startDate": "2026",
+      "endDate": "2026"
+    },
+    {
+      "id": "edu_google_ux_specialization",
+      "institution": "Google UX Specialization",
+      "degree": "UX Design",
+      "startDate": "2022",
+      "endDate": "2022"
+    }
+  ],
+  "skills": [
+    {
+      "name": "UX/UI Design"
+    },
+    {
+      "name": "Design Systems"
+    },
+    {
+      "name": "Interaction Design"
+    },
+    {
+      "name": "Service Design"
+    },
+    {
+      "name": "User Research"
+    },
+    {
+      "name": "Usability Testing"
+    },
+    {
+      "name": "Information Architecture"
+    },
+    {
+      "name": "Wireframing"
+    },
+    {
+      "name": "Prototyping"
+    },
+    {
+      "name": "Responsive UI Design"
+    },
+    {
+      "name": "HTML"
+    },
+    {
+      "name": "CSS"
+    },
+    {
+      "name": "JavaScript ES6"
+    },
+    {
+      "name": "React"
+    },
+    {
+      "name": "Astro"
+    },
+    {
+      "name": "Vue"
+    },
+    {
+      "name": "Node.js"
+    },
+    {
+      "name": "Redux"
+    },
+    {
+      "name": "WordPress"
+    },
+    {
+      "name": "Motion Design"
+    },
+    {
+      "name": "2D Motion Graphics"
+    },
+    {
+      "name": "Video Editing"
+    },
+    {
+      "name": "Visual Effects"
+    },
+    {
+      "name": "Stakeholder Interviews"
+    },
+    {
+      "name": "Journey Mapping"
+    },
+    {
+      "name": "Heat Maps"
+    }
+  ],
+  "documents": [
+    {
+      "id": "doc_cv_pdf",
+      "type": "resume",
+      "label": "CV",
+      "fileName": "CV.pdf",
+      "mimeType": "application/pdf"
+    }
+  ],
+  "applicationDefaults": {},
+  "customFields": {
+    "headline": "Designer / Web Developer",
+    "summary": "Making the complex simple, building web-services and connecting people with technology."
+  }
+}

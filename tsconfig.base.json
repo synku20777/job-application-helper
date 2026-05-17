@@ -1,0 +1,23 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "strict": true,
+    "jsx": "react-jsx",
+    "baseUrl": ".",
+    "paths": {
+      "@job-helper/adapters": ["packages/adapters/src/index.ts"],
+      "@job-helper/autofill-core": ["packages/autofill-core/src/index.ts"],
+      "@job-helper/dom-utils": ["packages/dom-utils/src/index.ts"],
+      "@job-helper/profile-schema": ["packages/profile-schema/src/index.ts"],
+      "@job-helper/shared": ["packages/shared/src/index.ts"]
+    },
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "skipLibCheck": true,
+    "types": ["chrome"]
+  }
+}

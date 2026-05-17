@@ -1,0 +1,9 @@
+node_modules/
+.npm-cache/
+.pnpm-store/
+.pip-cache/
+.tmp/
+dist/
+.vite/
+coverage/
+*.tsbuildinfo

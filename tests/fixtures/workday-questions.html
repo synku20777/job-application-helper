@@ -1,0 +1,22 @@
+<!doctype html>
+<html>
+  <body>
+    <form aria-label="Workday questions">
+      <h1>Application Questions</h1>
+      <label for="authorized">Are you legally authorized to work in this country?</label>
+      <select id="authorized" name="question_authorized">
+        <option>Yes</option>
+        <option>No</option>
+      </select>
+      <label for="sponsorship">Will you now or in the future require sponsorship?</label>
+      <select id="sponsorship" name="question_sponsorship">
+        <option>Yes</option>
+        <option>No</option>
+      </select>
+      <label id="locationLabel">Preferred office location</label>
+      <div id="locationDropdown" role="combobox" aria-labelledby="locationLabel" tabindex="0"></div>
+      <label for="why">Why are you interested in this role?</label>
+      <textarea id="why" name="question_why"></textarea>
+    </form>
+  </body>
+</html>

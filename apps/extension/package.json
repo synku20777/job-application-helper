@@ -1,0 +1,30 @@
+{
+  "name": "@job-helper/extension",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "vite build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "dependencies": {
+    "@crxjs/vite-plugin": "^2.0.0-beta.30",
+    "@job-helper/adapters": "workspace:*",
+    "@job-helper/autofill-core": "workspace:*",
+    "@job-helper/dom-utils": "workspace:*",
+    "@job-helper/profile-schema": "workspace:*",
+    "@job-helper/shared": "workspace:*",
+    "dexie": "^4.0.11",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.28"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.326",
+    "@types/react": "^19.1.5",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.5.0",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5"
+  }
+}
