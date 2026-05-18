@@ -246,3 +246,66 @@ export type PlatformDetection = {
   pageState?: string;
   stepKind?: string;
 };
+
+export type EncryptionStatus = {
+  configured: boolean;
+  unlocked: boolean;
+  hasLegacyProfiles: boolean;
+  encryptedProfileCount: number;
+  legacyProfileCount: number;
+  selectedProfileId?: string;
+  selectedProfileLabel?: string;
+};
+
+export type ProfileSummary = {
+  profileId: string;
+  label: string;
+  updatedAt: string;
+  selected: boolean;
+};
+
+export type ProfileVariantOverrides = {
+  links?: {
+    linkedin?: string;
+    github?: string;
+    portfolio?: string;
+    website?: string;
+  };
+  skills?: string[];
+  workExperienceDescription?: string;
+  remotePreference?: "remote" | "hybrid" | "onsite" | "flexible";
+  willingToRelocate?: boolean;
+  noticePeriod?: string;
+  resumeDocumentId?: string;
+  coverLetterDocumentId?: string;
+};
+
+export type ProfileVariant = {
+  variantId: string;
+  baseProfileId: string;
+  label: string;
+  targetRole?: string;
+  overrides: ProfileVariantOverrides;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type ProfileVariantSummary = {
+  variantId: string;
+  baseProfileId: string;
+  label: string;
+  targetRole?: string;
+  updatedAt: string;
+  selected: boolean;
+};
+
+export type FirstRunConsentStatus = {
+  accepted: boolean;
+  acceptedAt?: string;
+};
+
+export type ActiveTabComplianceStatus = {
+  url: string;
+  platform: PlatformDetection;
+  permissionState: "notRequired" | "granted" | "missing";
+};

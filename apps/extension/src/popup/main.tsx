@@ -1,20 +1,21 @@
 import { useEffect, useState } from "react";
 import { createRoot } from "react-dom/client";
-import type { CandidateProfile } from "@job-helper/profile-schema";
 import type { ExtensionResponse } from "@job-helper/shared";
 import "../ui.css";
 
 function Popup() {
-  const [profile, setProfile] = useState<CandidateProfile | null>(null);
+  const [profileLabel, setProfileLabel] = useState("No profile selected");
   const [platform, setPlatform] = useState("Unknown");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    void chrome.runtime.sendMessage({ type: "GET_SELECTED_PROFILE" }).then((response: ExtensionResponse) => {
-      if (response.ok && response.type === "GET_SELECTED_PROFILE") setProfile(response.profile);
+    void chrome.runtime.sendMessage({ type: "LIST_PROFILES" }).then((response: ExtensionResponse) => {
+      if (response.ok && response.type === "LIST_PROFILES") {
+        setProfileLabel(response.profiles.find((profile) => profile.selected)?.label ?? "No profile selected");
+      }
     });
-    void chrome.runtime.sendMessage({ type: "SCAN_PAGE" }).then((response: ExtensionResponse) => {
-      if (response.ok && response.type === "SCAN_PAGE") setPlatform(response.platform.label);
+    void chrome.runtime.sendMessage({ type: "GET_ACTIVE_TAB_STATUS" }).then((response: ExtensionResponse) => {
+      if (response.ok && response.type === "GET_ACTIVE_TAB_STATUS") setPlatform(response.status.platform.label);
       if (!response.ok) setError(response.error);
     });
   }, []);
@@ -34,7 +35,7 @@ function Popup() {
       <dl className="meta-list">
         <div>
           <dt>Profile</dt>
-          <dd>{profile?.meta.label ?? "No profile selected"}</dd>
+          <dd>{profileLabel}</dd>
         </div>
       </dl>
       {error ? <p className="notice error">{error}</p> : null}

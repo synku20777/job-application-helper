@@ -7,6 +7,7 @@ export default defineConfig({
   plugins: [react(), crx({ manifest })],
   build: {
     outDir: "dist",
-    emptyOutDir: true
+    emptyOutDir: true,
+    sourcemap: false
   }
 });

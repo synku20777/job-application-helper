@@ -202,7 +202,8 @@ export const workdayAdapter: AtsAdapter = {
     const exactElementIds = new Set(exactMatches.map((match) => match.elementId));
     const genericMatches = matchFields(
       matchableFields.filter((field) => !exactElementIds.has(field.elementId)),
-      "workday"
+      "workday",
+      { locales: [profile.meta.locale] }
     );
 
     return buildFillPlanFromMatches(

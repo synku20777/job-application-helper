@@ -76,7 +76,11 @@ export const candidateDocumentSchema = z.object({
   type: z.enum(["resume", "coverLetter", "other"]),
   label: z.string().trim().min(1),
   fileName: optionalString,
-  mimeType: optionalString
+  mimeType: optionalString,
+  description: optionalString,
+  targetRole: optionalString,
+  updatedAt: z.string().datetime().optional(),
+  tags: z.array(z.string().trim().min(1)).optional()
 });
 
 export const compensationExpectationSchema = z.object({

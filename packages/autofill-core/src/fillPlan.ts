@@ -209,6 +209,6 @@ export function buildFillPlan(
   options: FillOptions = {}
 ): FillPlan {
   const { overrideMatches, remainingFields } = matchFieldsWithOverrides(fields, platform.adapterId, options.siteOverride);
-  const matches = [...overrideMatches, ...matchFields(remainingFields, platform.adapterId)];
+  const matches = [...overrideMatches, ...matchFields(remainingFields, platform.adapterId, { locales: [profile.meta.locale] })];
   return buildFillPlanFromMatches(matches, profile, platform, url);
 }

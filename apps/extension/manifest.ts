@@ -1,4 +1,5 @@
 import { defineManifest } from "@crxjs/vite-plugin";
+import { ATS_HOST_PERMISSIONS } from "./src/background/permissions";
 
 export default defineManifest({
   manifest_version: 3,
@@ -6,15 +7,7 @@ export default defineManifest({
   version: "0.1.0",
   description: "Local-first job application autofill assistant.",
   permissions: ["storage", "activeTab", "scripting", "sidePanel"],
-  optional_host_permissions: [
-    "https://*.myworkdayjobs.com/*",
-    "https://jobs.smartrecruiters.com/*",
-    "https://careers.smartrecruiters.com/*",
-    "https://boards.greenhouse.io/*",
-    "https://job-boards.greenhouse.io/*",
-    "https://*.jobs.personio.com/*",
-    "https://*.jobs.personio.de/*"
-  ],
+  optional_host_permissions: [...ATS_HOST_PERMISSIONS],
   background: {
     service_worker: "src/background/index.ts",
     type: "module"
@@ -25,20 +18,5 @@ export default defineManifest({
   side_panel: {
     default_path: "src/sidepanel/index.html"
   },
-  options_page: "src/sidepanel/index.html",
-  content_scripts: [
-    {
-      matches: [
-        "https://*.myworkdayjobs.com/*",
-        "https://jobs.smartrecruiters.com/*",
-        "https://careers.smartrecruiters.com/*",
-        "https://boards.greenhouse.io/*",
-        "https://job-boards.greenhouse.io/*",
-        "https://*.jobs.personio.com/*",
-        "https://*.jobs.personio.de/*"
-      ],
-      js: ["src/content/index.ts"],
-      run_at: "document_idle"
-    }
-  ]
+  options_page: "src/sidepanel/index.html"
 });

@@ -4,14 +4,14 @@ import type { CanonicalFieldKey, FieldMatch, FillStep, FormFieldNode, MatchEvide
 import type { AdapterDetectContext, AtsAdapter } from "./baseAdapter";
 
 const exactPersonioFields: Array<{ key: CanonicalFieldKey; patterns: RegExp[] }> = [
-  { key: "personal.firstName", patterns: [/\bfirst[_-\s]?name\b/i, /\bgiven[_-\s]?name\b/i, /\bvorname\b/i] },
-  { key: "personal.lastName", patterns: [/\blast[_-\s]?name\b/i, /\bsurname\b/i, /\bnachname\b/i] },
+  { key: "personal.firstName", patterns: [/\bfirst[_-\s]?name\b/i, /\bgiven[_-\s]?name\b/i] },
+  { key: "personal.lastName", patterns: [/\blast[_-\s]?name\b/i, /\bsurname\b/i] },
   { key: "personal.email", patterns: [/\bemail\b/i, /\be-mail\b/i] },
-  { key: "personal.phone", patterns: [/\bphone\b/i, /\btelephone\b/i, /\btelefon\b/i, /\bmobilnummer\b/i, /\bmobile\b/i] },
-  { key: "documents.resume", patterns: [/\bresume\b/i, /\bcv\b/i, /\bcurriculum[_-\s]?vitae\b/i, /\blebenslauf\b/i] },
-  { key: "documents.coverLetter", patterns: [/\bcover[_-\s]?letter\b/i, /\bmotivation[_-\s]?letter\b/i, /\banschreiben\b/i] },
+  { key: "personal.phone", patterns: [/\bphone\b/i, /\btelephone\b/i, /\bmobile\b/i] },
+  { key: "documents.resume", patterns: [/\bresume\b/i, /\bcv\b/i, /\bcurriculum[_-\s]?vitae\b/i] },
+  { key: "documents.coverLetter", patterns: [/\bcover[_-\s]?letter\b/i, /\bmotivation[_-\s]?letter\b/i] },
   { key: "personal.links.linkedin", patterns: [/\blinkedin\b/i] },
-  { key: "personal.links.portfolio", patterns: [/\bwebsite\b/i, /\bportfolio\b/i, /\bhomepage\b/i, /\bwebseite\b/i] }
+  { key: "personal.links.portfolio", patterns: [/\bwebsite\b/i, /\bportfolio\b/i, /\bhomepage\b/i] }
 ];
 
 function isPersonioHost(hostname: string): boolean {
@@ -129,7 +129,8 @@ export const personioAdapter: AtsAdapter = {
     const customQuestionElementIds = new Set(customQuestionFields.map((field) => field.elementId));
     const genericMatches = matchFields(
       remainingFields.filter((field) => !exactElementIds.has(field.elementId) && !customQuestionElementIds.has(field.elementId)),
-      "personio"
+      "personio",
+      { locales: [profile.meta.locale, "de"] }
     );
 
     const manualSteps = customQuestionFields.map(manualQuestionStep);

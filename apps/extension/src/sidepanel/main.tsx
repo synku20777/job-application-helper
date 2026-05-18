@@ -2,8 +2,31 @@ import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { isSensitiveField, stepFromMatch } from "@job-helper/autofill-core";
 import { sampleProfile, safeParseCandidateProfile, type CandidateProfile } from "@job-helper/profile-schema";
-import type { CanonicalFieldKey, ExtensionResponse, FillPlan, FillStep, FormFieldNode, PlatformDetection, SiteMappingOverride } from "@job-helper/shared";
+import type {
+  ActiveTabComplianceStatus,
+  CanonicalFieldKey,
+  EncryptionStatus,
+  ExtensionResponse,
+  FillPlan,
+  FillStep,
+  FirstRunConsentStatus,
+  FormFieldNode,
+  PlatformDetection,
+  ProfileVariant,
+  ProfileVariantSummary,
+  ProfileSummary,
+  SiteMappingOverride
+} from "@job-helper/shared";
 import { CANONICAL_FIELD_KEYS } from "@job-helper/shared";
+import { buildProfileSnippets } from "../linkedin/snippets";
+import {
+  deleteProfileDocument,
+  describeDocumentReference,
+  documentsByType,
+  upsertProfileDocument,
+  type CandidateDocument
+} from "../profile/documents";
+import { applyProfileVariant, validateVariantOverrides } from "../storage/profileVariants";
 import "../ui.css";
 
 type ScanState = {
@@ -43,10 +66,10 @@ function stepStatus(step: FillStep): string {
   return "auto";
 }
 
-function valuePreview(step: FillStep): string {
+function valuePreview(step: FillStep, profile: CandidateProfile | null): string {
   if (step.type === "setText" || step.type === "selectOption") return step.value;
   if (step.type === "clickCheckbox") return step.checked ? "Yes" : "No";
-  if (step.type === "uploadFile") return step.documentId;
+  if (step.type === "uploadFile") return describeDocumentReference(profile, step.documentId);
   return step.reason;
 }
 
@@ -54,9 +77,47 @@ function canFill(step: FillStep): boolean {
   return step.type !== "manual" && step.type !== "uploadFile";
 }
 
+function variantId(): string {
+  return `variant-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function defaultDocumentForm(): CandidateDocument {
+  return {
+    id: "",
+    type: "resume",
+    label: "",
+    fileName: "",
+    mimeType: "application/pdf",
+    description: "",
+    targetRole: "",
+    tags: []
+  };
+}
+
 function App() {
   const [profile, setProfile] = useState<CandidateProfile | null>(null);
   const [profileJson, setProfileJson] = useState(JSON.stringify(sampleProfile, null, 2));
+  const [encryptionStatus, setEncryptionStatus] = useState<EncryptionStatus | null>(null);
+  const [profileSummaries, setProfileSummaries] = useState<ProfileSummary[]>([]);
+  const [variantSummaries, setVariantSummaries] = useState<ProfileVariantSummary[]>([]);
+  const [selectedVariant, setSelectedVariant] = useState<ProfileVariant | null>(null);
+  const [variantLabel, setVariantLabel] = useState("");
+  const [variantRole, setVariantRole] = useState("");
+  const [variantJson, setVariantJson] = useState(
+    JSON.stringify(
+      {
+        skills: ["TypeScript", "React"],
+        remotePreference: "hybrid"
+      },
+      null,
+      2
+    )
+  );
+  const [documentForm, setDocumentForm] = useState<CandidateDocument>(defaultDocumentForm());
+  const [passphrase, setPassphrase] = useState("");
+  const [unlockPassphrase, setUnlockPassphrase] = useState("");
+  const [consent, setConsent] = useState<FirstRunConsentStatus | null>(null);
+  const [activeTabStatus, setActiveTabStatus] = useState<ActiveTabComplianceStatus | null>(null);
   const [scan, setScan] = useState<ScanState | null>(null);
   const [plan, setPlan] = useState<FillPlan | null>(null);
   const [accepted, setAccepted] = useState<Set<string>>(new Set());
@@ -66,13 +127,67 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    void refreshConsent();
+    void refreshActiveTabStatus();
+    void refreshEncryptionStatus();
+    void refreshProfileSummaries();
     void send({ type: "GET_SELECTED_PROFILE" }).then((response) => {
       if (response.ok && response.type === "GET_SELECTED_PROFILE") {
         setProfile(response.profile);
         if (response.profile) setProfileJson(JSON.stringify(response.profile, null, 2));
+        if (response.profile) void refreshProfileVariants(response.profile.meta.profileId);
       }
     });
   }, []);
+
+  async function refreshEncryptionStatus() {
+    const response = await send({ type: "GET_ENCRYPTION_STATUS" });
+    if (response.ok && response.type === "GET_ENCRYPTION_STATUS") setEncryptionStatus(response.status);
+  }
+
+  async function refreshProfileSummaries() {
+    const response = await send({ type: "LIST_PROFILES" });
+    if (response.ok && response.type === "LIST_PROFILES") {
+      setProfileSummaries(response.profiles);
+      await refreshProfileVariants(response.profiles.find((summary) => summary.selected)?.profileId);
+    }
+  }
+
+  async function refreshProfileVariants(baseProfileId: string | undefined) {
+    if (!baseProfileId) {
+      setVariantSummaries([]);
+      return;
+    }
+    const response = await send({ type: "LIST_PROFILE_VARIANTS", baseProfileId });
+    if (response.ok && response.type === "LIST_PROFILE_VARIANTS") applyVariantResponse(response);
+  }
+
+  function applyVariantResponse(response: {
+    variants: ProfileVariantSummary[];
+    selectedVariantId?: string;
+    selectedVariant?: ProfileVariant | null;
+  }) {
+    setVariantSummaries(response.variants);
+    setSelectedVariant(response.selectedVariant ?? null);
+    if (response.selectedVariant) {
+      setVariantLabel(response.selectedVariant.label);
+      setVariantRole(response.selectedVariant.targetRole ?? "");
+      setVariantJson(JSON.stringify(response.selectedVariant.overrides, null, 2));
+    } else {
+      setVariantLabel("");
+      setVariantRole("");
+    }
+  }
+
+  async function refreshConsent() {
+    const response = await send({ type: "GET_FIRST_RUN_CONSENT" });
+    if (response.ok && response.type === "GET_FIRST_RUN_CONSENT") setConsent(response.consent);
+  }
+
+  async function refreshActiveTabStatus() {
+    const response = await send({ type: "GET_ACTIVE_TAB_STATUS" });
+    if (response.ok && response.type === "GET_ACTIVE_TAB_STATUS") setActiveTabStatus(response.status);
+  }
 
   function fieldForStep(step: FillStep): FormFieldNode | undefined {
     return scan?.fields.find((field) => field.elementId === step.target.elementId);
@@ -80,7 +195,7 @@ function App() {
 
   function applyDraftToStep(step: FillStep): FillStep {
     const draftKey = mappingDrafts[step.target.elementId];
-    if (!draftKey || !profile || !plan) return step;
+    if (!draftKey || !effectiveProfile || !plan) return step;
 
     const field = fieldForStep(step);
     if (!field) return step;
@@ -96,14 +211,17 @@ function App() {
         requiresReview: isSensitiveField(draftKey),
         node: field
       },
-      profile
+      effectiveProfile
     );
   }
+
+  const activeVariantSummary = variantSummaries.find((variant) => variant.selected);
+  const effectiveProfile = useMemo(() => (profile ? applyProfileVariant(profile, selectedVariant) : null), [profile, selectedVariant]);
 
   const effectivePlan = useMemo<FillPlan | null>(() => {
     if (!plan) return null;
     return { ...plan, steps: plan.steps.map(applyDraftToStep) };
-  }, [plan, mappingDrafts, profile, scan]);
+  }, [plan, mappingDrafts, effectiveProfile, scan]);
 
   const counts = useMemo(() => {
     const steps = effectivePlan?.steps ?? [];
@@ -122,9 +240,45 @@ function App() {
       fieldCount: scan?.fields.length ?? 0,
       stepCount: effectivePlan?.steps.length ?? 0,
       warningCount: effectivePlan?.warnings.length ?? 0,
-      overrideCount: siteOverride?.fields.length ?? 0
+      overrideCount: siteOverride?.fields.length ?? 0,
+      permissionState: activeTabStatus?.permissionState ?? "unknown",
+      restricted: scan?.platform.restricted || activeTabStatus?.platform.restricted ? "yes" : "no",
+      copyOnly: scan?.platform.copyOnly || activeTabStatus?.platform.copyOnly ? "yes" : "no",
+      variant: activeVariantSummary?.label ?? "none"
     };
-  }, [scan, effectivePlan, siteOverride]);
+  }, [scan, effectivePlan, siteOverride, activeTabStatus, activeVariantSummary]);
+
+  const profileSnippets = useMemo(() => (effectiveProfile ? buildProfileSnippets(effectiveProfile) : []), [effectiveProfile]);
+  const resumeDocuments = useMemo(() => documentsByType(profile, "resume"), [profile]);
+  const coverLetterDocuments = useMemo(() => documentsByType(profile, "coverLetter"), [profile]);
+
+  function syncProfileEditor(nextProfile: CandidateProfile) {
+    setProfile(nextProfile);
+    setProfileJson(JSON.stringify(nextProfile, null, 2));
+    setPlan(null);
+    setAccepted(new Set());
+  }
+
+  function updateVariantDocumentId(key: "resumeDocumentId" | "coverLetterDocumentId", documentId: string) {
+    let parsed: Record<string, unknown> = {};
+    try {
+      parsed = JSON.parse(variantJson) as Record<string, unknown>;
+    } catch {
+      parsed = {};
+    }
+    if (documentId) parsed[key] = documentId;
+    else delete parsed[key];
+    setVariantJson(JSON.stringify(parsed, null, 2));
+  }
+
+  function variantDocumentId(key: "resumeDocumentId" | "coverLetterDocumentId"): string {
+    try {
+      const parsed = JSON.parse(variantJson) as Record<string, unknown>;
+      return typeof parsed[key] === "string" ? parsed[key] : "";
+    } catch {
+      return "";
+    }
+  }
 
   async function loadSiteOverrides(nextScan: ScanState): Promise<SiteMappingOverride | null> {
     const hostname = hostnameFromUrl(nextScan.url);
@@ -145,6 +299,11 @@ function App() {
 
   async function saveProfileFromJson() {
     setError(null);
+    if (!encryptionStatus?.unlocked) {
+      setError("Unlock encrypted profile storage before saving.");
+      return;
+    }
+
     let parsedJson: unknown;
     try {
       parsedJson = JSON.parse(profileJson) as unknown;
@@ -161,6 +320,9 @@ function App() {
     const response = await send({ type: "SAVE_PROFILE", profile: result.data });
     if (response.ok && response.type === "SAVE_PROFILE") {
       setProfile(response.profile);
+      await refreshEncryptionStatus();
+      await refreshProfileSummaries();
+      await refreshProfileVariants(response.profile.meta.profileId);
       setStatus("Profile saved locally.");
     } else if (!response.ok) {
       setError(response.error);
@@ -168,6 +330,12 @@ function App() {
   }
 
   async function exportProfile() {
+    setError(null);
+    if (!encryptionStatus?.unlocked) {
+      setError("Unlock profiles before exporting.");
+      return;
+    }
+
     const response = await send({ type: "EXPORT_PROFILE" });
     if (response.ok && response.type === "EXPORT_PROFILE" && response.profile) {
       setProfileJson(JSON.stringify(response.profile, null, 2));
@@ -181,10 +349,15 @@ function App() {
     const response = await send({ type: "DELETE_ALL_DATA" });
     if (response.ok) {
       setProfile(null);
+      setProfileJson(JSON.stringify(sampleProfile, null, 2));
       setPlan(null);
       setSiteOverride(null);
       setMappingDrafts({});
       setAccepted(new Set());
+      applyVariantResponse({ variants: [] });
+      await refreshConsent();
+      await refreshEncryptionStatus();
+      await refreshProfileSummaries();
       setStatus("Local profile data deleted.");
     } else {
       setError(response.error);
@@ -193,12 +366,22 @@ function App() {
 
   async function scanPage() {
     setError(null);
+    if (!consent?.accepted) {
+      setError("Review and accept the privacy disclosure before scanning.");
+      return;
+    }
     setPlan(null);
     setMappingDrafts({});
     const response = await send({ type: "SCAN_PAGE" });
     if (response.ok && response.type === "SCAN_PAGE") {
+      await refreshActiveTabStatus();
       const nextScan = { fields: response.fields, platform: response.platform, url: response.url };
       setScan(nextScan);
+      if (response.platform.copyOnly) {
+        setSiteOverride(null);
+        setStatus("LinkedIn detected. Copy-assist mode is available; automated scanning and filling are disabled.");
+        return;
+      }
       const override = await loadSiteOverrides(nextScan);
       setStatus(`Detected ${response.fields.length} fields on ${response.platform.label}. ${override?.fields.length ?? 0} saved mappings found.`);
     } else if (!response.ok) {
@@ -207,8 +390,16 @@ function App() {
   }
 
   async function buildPlan() {
+    if (scan?.platform.copyOnly) {
+      setError("Copy-assist platforms do not support automated fill plans.");
+      return;
+    }
     if (!profile || !scan) {
       setError("Save a profile and scan a page first.");
+      return;
+    }
+    if (!encryptionStatus?.unlocked) {
+      setError("Unlock profiles before building a fill plan.");
       return;
     }
     const response = await send({ type: "BUILD_FILL_PLAN", profile, fields: scan.fields, platform: scan.platform });
@@ -224,7 +415,7 @@ function App() {
   }
 
   async function fillAccepted() {
-    if (!effectivePlan) return;
+    if (!effectivePlan || scan?.platform.copyOnly) return;
     const response = await send({ type: "EXECUTE_FILL_PLAN", plan: effectivePlan, acceptedElementIds: Array.from(accepted) });
     if (response.ok && response.type === "EXECUTE_FILL_PLAN") {
       const { completedSteps, skippedSteps, manualSteps, status: fillStatus } = response.result;
@@ -291,33 +482,587 @@ function App() {
     }
   }
 
+  async function copySnippet(label: string, value: string) {
+    await navigator.clipboard.writeText(value);
+    setStatus(`${label} copied.`);
+  }
+
+  async function copyDocumentValue(label: string, value: string | undefined) {
+    if (!value) return;
+    await navigator.clipboard.writeText(value);
+    setStatus(`${label} copied.`);
+  }
+
+  async function acceptConsent() {
+    setError(null);
+    const response = await send({ type: "ACCEPT_FIRST_RUN_CONSENT" });
+    if (response.ok && response.type === "ACCEPT_FIRST_RUN_CONSENT") {
+      setConsent(response.consent);
+      setStatus("Privacy disclosure accepted. You can now set up encrypted storage and scan pages.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function setStorePassphrase() {
+    setError(null);
+    const response = await send({ type: "SET_PASSPHRASE", passphrase });
+    if (response.ok && response.type === "SET_PASSPHRASE") {
+      setEncryptionStatus(response.status);
+      setProfile(response.profile);
+      if (response.profile) setProfileJson(JSON.stringify(response.profile, null, 2));
+      setPassphrase("");
+      await refreshProfileSummaries();
+      await refreshProfileVariants(response.profile?.meta.profileId);
+      setStatus(response.status.hasLegacyProfiles ? "Profile encryption configured." : "Encrypted profile storage ready.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function unlockStore() {
+    setError(null);
+    const response = await send({ type: "UNLOCK_PROFILE_STORE", passphrase: unlockPassphrase });
+    if (response.ok && response.type === "UNLOCK_PROFILE_STORE") {
+      setEncryptionStatus(response.status);
+      setProfile(response.profile);
+      if (response.profile) setProfileJson(JSON.stringify(response.profile, null, 2));
+      setUnlockPassphrase("");
+      await refreshProfileSummaries();
+      await refreshProfileVariants(response.profile?.meta.profileId);
+      setStatus("Profiles unlocked.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function lockStore() {
+    setError(null);
+    const response = await send({ type: "LOCK_PROFILE_STORE" });
+    if (response.ok && response.type === "LOCK_PROFILE_STORE") {
+      setEncryptionStatus(response.status);
+      setProfile(null);
+      setProfileJson(JSON.stringify(sampleProfile, null, 2));
+      setPlan(null);
+      setMappingDrafts({});
+      setAccepted(new Set());
+      applyVariantResponse({ variants: [] });
+      await refreshProfileSummaries();
+      setStatus("Profiles locked.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function selectSavedProfile(profileId: string) {
+    setError(null);
+    const response = await send({ type: "SELECT_PROFILE", profileId });
+    if (response.ok && response.type === "SELECT_PROFILE") {
+      setProfileSummaries(response.profiles);
+      setProfile(response.profile);
+      if (response.profile) setProfileJson(JSON.stringify(response.profile, null, 2));
+      else setProfileJson(JSON.stringify(sampleProfile, null, 2));
+      setPlan(null);
+      setMappingDrafts({});
+      setAccepted(new Set());
+      await refreshProfileVariants(profileId);
+      await refreshEncryptionStatus();
+      setStatus(response.profile ? "Selected profile loaded." : "Selected profile. Unlock profiles to edit or export it.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function deleteSelectedProfile() {
+    const selected = profileSummaries.find((summary) => summary.selected);
+    if (!selected) return;
+
+    setError(null);
+    const response = await send({ type: "DELETE_PROFILE", profileId: selected.profileId });
+    if (response.ok && response.type === "DELETE_PROFILE") {
+      setProfileSummaries(response.profiles);
+      setProfile(response.profile);
+      if (response.profile) setProfileJson(JSON.stringify(response.profile, null, 2));
+      else setProfileJson(JSON.stringify(sampleProfile, null, 2));
+      setPlan(null);
+      setMappingDrafts({});
+      setAccepted(new Set());
+      await refreshProfileVariants(response.profiles.find((summary) => summary.selected)?.profileId);
+      await refreshEncryptionStatus();
+      setStatus("Profile deleted.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function selectVariant(nextVariantId: string) {
+    const baseProfileId = profile?.meta.profileId ?? selectedProfileSummary?.profileId;
+    if (!baseProfileId) return;
+
+    setError(null);
+    const response = await send({
+      type: "SELECT_PROFILE_VARIANT",
+      baseProfileId,
+      variantId: nextVariantId || null
+    });
+    if (response.ok && response.type === "SELECT_PROFILE_VARIANT") {
+      applyVariantResponse(response);
+      setPlan(null);
+      setAccepted(new Set());
+      setStatus(response.selectedVariant ? "Role variant selected." : "Role variant cleared.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function saveVariant() {
+    const baseProfileId = profile?.meta.profileId ?? selectedProfileSummary?.profileId;
+    if (!baseProfileId) {
+      setError("Select a base profile first.");
+      return;
+    }
+
+    let overrides: ProfileVariant["overrides"];
+    try {
+      overrides = validateVariantOverrides(JSON.parse(variantJson));
+    } catch (variantError) {
+      setError(variantError instanceof Error ? variantError.message : "Invalid role variant JSON.");
+      return;
+    }
+
+    const label = variantLabel.trim();
+    if (!label) {
+      setError("Variant label is required.");
+      return;
+    }
+
+    setError(null);
+    const response = await send({
+      type: "SAVE_PROFILE_VARIANT",
+      variant: {
+        variantId: selectedVariant?.variantId ?? variantId(),
+        baseProfileId,
+        label,
+        targetRole: variantRole.trim() || undefined,
+        overrides
+      }
+    });
+    if (response.ok && response.type === "SAVE_PROFILE_VARIANT") {
+      applyVariantResponse(response);
+      setPlan(null);
+      setAccepted(new Set());
+      setStatus("Role variant saved.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function deleteVariant() {
+    const baseProfileId = profile?.meta.profileId ?? selectedProfileSummary?.profileId;
+    if (!baseProfileId || !selectedVariant) return;
+
+    setError(null);
+    const response = await send({
+      type: "DELETE_PROFILE_VARIANT",
+      baseProfileId,
+      variantId: selectedVariant.variantId
+    });
+    if (response.ok && response.type === "DELETE_PROFILE_VARIANT") {
+      applyVariantResponse(response);
+      setPlan(null);
+      setAccepted(new Set());
+      setStatus("Role variant deleted.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  function editDocument(document: CandidateDocument) {
+    setDocumentForm({ ...document, tags: document.tags ?? [] });
+  }
+
+  function saveDocumentMetadata() {
+    if (!profile || !encryptionStatus?.unlocked) {
+      setError("Unlock and select a profile before editing documents.");
+      return;
+    }
+
+    const documentId = documentForm.id.trim();
+    const label = documentForm.label.trim();
+    if (!documentId || !label) {
+      setError("Document id and label are required.");
+      return;
+    }
+
+    const nextProfile = upsertProfileDocument(profile, {
+      ...documentForm,
+      id: documentId,
+      label,
+      fileName: documentForm.fileName?.trim() || undefined,
+      mimeType: documentForm.mimeType?.trim() || undefined,
+      description: documentForm.description?.trim() || undefined,
+      targetRole: documentForm.targetRole?.trim() || undefined,
+      tags: documentForm.tags?.map((tag) => tag.trim()).filter(Boolean)
+    });
+
+    syncProfileEditor(nextProfile);
+    setDocumentForm(defaultDocumentForm());
+    setError(null);
+    setStatus("Document metadata updated in the profile editor. Save profile to persist it.");
+  }
+
+  function deleteDocumentMetadata(documentId: string) {
+    if (!profile || !encryptionStatus?.unlocked) return;
+    syncProfileEditor(deleteProfileDocument(profile, documentId));
+    setStatus("Document metadata removed from the profile editor. Save profile to persist it.");
+  }
+
+  const isCopyOnly = Boolean(scan?.platform.copyOnly);
+  const selectedProfileSummary = profileSummaries.find((summary) => summary.selected);
+
+  if (consent && !consent.accepted) {
+    return (
+      <main className="panel-shell">
+        <header className="panel-header">
+          <div>
+            <h1>Job Autofill</h1>
+            <p>Privacy disclosure</p>
+          </div>
+        </header>
+        {error ? <p className="notice error">{error}</p> : null}
+        <section className="section consent-card">
+          <h2>Before You Start</h2>
+          <p className="help-text">
+            This extension stores profile data locally in your browser. Profiles are encrypted with your passphrase before saving. No
+            backend, sync, telemetry, scraping, or remote code is used.
+          </p>
+          <ul className="consent-list">
+            <li>You review every fill plan before anything is filled.</li>
+            <li>The extension never submits applications, creates accounts, logs in, or bypasses CAPTCHA or assessments.</li>
+            <li>LinkedIn is copy-assist only. The extension does not scan, modify, or fill LinkedIn pages.</li>
+            <li>Supported ATS site access is requested only when you click Scan page.</li>
+          </ul>
+          <button className="primary" onClick={acceptConsent}>
+            Accept and continue
+          </button>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="panel-shell">
       <header className="panel-header">
         <div>
           <h1>Job Autofill</h1>
-          <p>{profile ? profile.meta.label : "No profile saved"}</p>
+          <p>{profile?.meta.label ?? selectedProfileSummary?.label ?? "No profile saved"}</p>
         </div>
-        <button onClick={scanPage}>Scan page</button>
+        <button disabled={!consent?.accepted} onClick={scanPage}>
+          Scan page
+        </button>
       </header>
 
       {error ? <p className="notice error">{error}</p> : <p className="notice">{status}</p>}
 
       <section className="section">
+        <h2>Encrypted Storage</h2>
+        <p className="help-text">
+          Profiles are encrypted locally with your passphrase before they are saved. If the passphrase is lost, encrypted profile data
+          cannot be recovered.
+        </p>
+        {!encryptionStatus?.configured || encryptionStatus.hasLegacyProfiles ? (
+          <div className="button-row">
+            <input
+              className="text-input"
+              type="password"
+              value={passphrase}
+              placeholder="Set passphrase"
+              onChange={(event) => setPassphrase(event.target.value)}
+            />
+            <button disabled={!passphrase} onClick={setStorePassphrase}>
+              Set passphrase
+            </button>
+          </div>
+        ) : null}
+        {encryptionStatus?.configured && !encryptionStatus.unlocked ? (
+          <div className="button-row">
+            <input
+              className="text-input"
+              type="password"
+              value={unlockPassphrase}
+              placeholder="Unlock passphrase"
+              onChange={(event) => setUnlockPassphrase(event.target.value)}
+            />
+            <button disabled={!unlockPassphrase} onClick={unlockStore}>
+              Unlock profiles
+            </button>
+          </div>
+        ) : null}
+        {encryptionStatus?.unlocked ? (
+          <div className="button-row">
+            <span className="status-pill status-auto">Unlocked</span>
+            <button onClick={lockStore}>Lock</button>
+          </div>
+        ) : null}
+      </section>
+
+      <section className="section">
         <h2>Profile JSON</h2>
+        <div className="profile-selector-row">
+          <select
+            value={selectedProfileSummary?.profileId ?? ""}
+            disabled={profileSummaries.length === 0}
+            onChange={(event) => selectSavedProfile(event.target.value)}
+          >
+            <option value="" disabled>
+              {profileSummaries.length === 0 ? "No saved profiles" : "Select profile"}
+            </option>
+            {profileSummaries.map((summary) => (
+              <option key={summary.profileId} value={summary.profileId}>
+                {summary.label} - {new Date(summary.updatedAt).toLocaleDateString()}
+              </option>
+            ))}
+          </select>
+          <button className="danger" disabled={!selectedProfileSummary} onClick={deleteSelectedProfile}>
+            Delete selected
+          </button>
+        </div>
+        {encryptionStatus?.unlocked ? (
+          <textarea
+            className="json-editor"
+            value={profileJson}
+            onChange={(event) => setProfileJson(event.target.value)}
+            spellCheck={false}
+          />
+        ) : (
+          <p className="help-text">Unlock profiles to view, edit, import, or export profile JSON. Saved profile labels remain visible while locked.</p>
+        )}
+        <div className="button-row">
+          <button className="primary" disabled={!encryptionStatus?.unlocked} onClick={saveProfileFromJson}>
+            Save profile
+          </button>
+          <button disabled={!encryptionStatus?.unlocked} onClick={exportProfile}>
+            Export
+          </button>
+          <button className="danger" onClick={deleteData}>
+            Delete data
+          </button>
+        </div>
+      </section>
+
+      <section className="section">
+        <h2>Role Variant</h2>
+        <p className="help-text">
+          Variants tailor safe fields for a role without changing the selected base profile. Sensitive answers cannot be overridden.
+        </p>
+        <div className="profile-selector-row">
+          <select
+            value={selectedVariant?.variantId ?? ""}
+            disabled={!selectedProfileSummary || variantSummaries.length === 0}
+            onChange={(event) => selectVariant(event.target.value)}
+          >
+            <option value="">No variant</option>
+            {variantSummaries.map((variant) => (
+              <option key={variant.variantId} value={variant.variantId}>
+                {variant.label}
+                {variant.targetRole ? ` - ${variant.targetRole}` : ""}
+              </option>
+            ))}
+          </select>
+          <button disabled={!selectedVariant} onClick={() => selectVariant("")}>
+            Clear
+          </button>
+          <button className="danger" disabled={!selectedVariant} onClick={deleteVariant}>
+            Delete variant
+          </button>
+        </div>
+        <div className="button-row">
+          <input
+            className="text-input"
+            value={variantLabel}
+            placeholder="Variant label"
+            onChange={(event) => setVariantLabel(event.target.value)}
+          />
+          <input
+            className="text-input"
+            value={variantRole}
+            placeholder="Target role"
+            onChange={(event) => setVariantRole(event.target.value)}
+          />
+        </div>
+        <div className="document-selector-grid">
+          <label>
+            Resume
+            <select
+              value={variantDocumentId("resumeDocumentId")}
+              disabled={resumeDocuments.length === 0}
+              onChange={(event) => updateVariantDocumentId("resumeDocumentId", event.target.value)}
+            >
+              <option value="">Base profile resume</option>
+              {resumeDocuments.map((document) => (
+                <option key={document.id} value={document.id}>
+                  {document.label}
+                  {document.fileName ? ` - ${document.fileName}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            Cover letter
+            <select
+              value={variantDocumentId("coverLetterDocumentId")}
+              disabled={coverLetterDocuments.length === 0}
+              onChange={(event) => updateVariantDocumentId("coverLetterDocumentId", event.target.value)}
+            >
+              <option value="">Base profile cover letter</option>
+              {coverLetterDocuments.map((document) => (
+                <option key={document.id} value={document.id}>
+                  {document.label}
+                  {document.fileName ? ` - ${document.fileName}` : ""}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
         <textarea
-          className="json-editor"
-          value={profileJson}
-          onChange={(event) => setProfileJson(event.target.value)}
+          className="json-editor compact-editor"
+          value={variantJson}
+          onChange={(event) => setVariantJson(event.target.value)}
           spellCheck={false}
         />
         <div className="button-row">
-          <button className="primary" onClick={saveProfileFromJson}>
-            Save profile
+          <button className="primary" disabled={!selectedProfileSummary} onClick={saveVariant}>
+            Save variant
           </button>
-          <button onClick={exportProfile}>Export</button>
-          <button className="danger" onClick={deleteData}>
-            Delete data
+        </div>
+      </section>
+
+      <section className="section">
+        <h2>Documents</h2>
+        <p className="help-text">
+          Store document metadata inside the encrypted profile. File uploads remain manual on job application pages.
+        </p>
+        <div className="field-list">
+          {(profile?.documents ?? []).map((document) => (
+            <div key={document.id} className="document-row">
+              <div>
+                <strong>
+                  {document.label}
+                  {document.fileName ? ` (${document.fileName})` : ""}
+                </strong>
+                <small>
+                  {document.type} - {document.id}
+                  {document.targetRole ? ` - ${document.targetRole}` : ""}
+                  {document.updatedAt ? ` - ${new Date(document.updatedAt).toLocaleDateString()}` : ""}
+                </small>
+                {document.description ? <p className="help-text">{document.description}</p> : null}
+                {document.tags?.length ? <small>Tags: {document.tags.join(", ")}</small> : null}
+              </div>
+              <div className="document-actions">
+                <button onClick={() => copyDocumentValue("Document id", document.id)}>Copy id</button>
+                <button disabled={!document.fileName} onClick={() => copyDocumentValue("Filename", document.fileName)}>
+                  Copy filename
+                </button>
+                <button disabled={!encryptionStatus?.unlocked} onClick={() => editDocument(document)}>
+                  Edit
+                </button>
+                <button className="danger" disabled={!encryptionStatus?.unlocked} onClick={() => deleteDocumentMetadata(document.id)}>
+                  Delete
+                </button>
+              </div>
+            </div>
+          ))}
+          {profile && (profile.documents ?? []).length === 0 ? <p className="help-text">No documents saved for this profile.</p> : null}
+          {!profile ? <p className="help-text">Unlock and select a profile to manage document metadata.</p> : null}
+        </div>
+        <div className="document-form-grid">
+          <label>
+            Type
+            <select
+              value={documentForm.type}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              onChange={(event) => setDocumentForm((current) => ({ ...current, type: event.target.value as CandidateDocument["type"] }))}
+            >
+              <option value="resume">Resume</option>
+              <option value="coverLetter">Cover letter</option>
+              <option value="other">Other</option>
+            </select>
+          </label>
+          <label>
+            Document id
+            <input
+              className="text-input"
+              value={documentForm.id}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              placeholder="resume_frontend"
+              onChange={(event) => setDocumentForm((current) => ({ ...current, id: event.target.value }))}
+            />
+          </label>
+          <label>
+            Label
+            <input
+              className="text-input"
+              value={documentForm.label}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              placeholder="Frontend Resume"
+              onChange={(event) => setDocumentForm((current) => ({ ...current, label: event.target.value }))}
+            />
+          </label>
+          <label>
+            Filename
+            <input
+              className="text-input"
+              value={documentForm.fileName ?? ""}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              placeholder="frontend-resume.pdf"
+              onChange={(event) => setDocumentForm((current) => ({ ...current, fileName: event.target.value }))}
+            />
+          </label>
+          <label>
+            Target role
+            <input
+              className="text-input"
+              value={documentForm.targetRole ?? ""}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              placeholder="Frontend"
+              onChange={(event) => setDocumentForm((current) => ({ ...current, targetRole: event.target.value }))}
+            />
+          </label>
+          <label>
+            Tags
+            <input
+              className="text-input"
+              value={(documentForm.tags ?? []).join(", ")}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              placeholder="frontend, react"
+              onChange={(event) =>
+                setDocumentForm((current) => ({
+                  ...current,
+                  tags: event.target.value
+                    .split(",")
+                    .map((tag) => tag.trim())
+                    .filter(Boolean)
+                }))
+              }
+            />
+          </label>
+          <label className="full-width">
+            Description
+            <textarea
+              className="json-editor compact-editor"
+              value={documentForm.description ?? ""}
+              disabled={!profile || !encryptionStatus?.unlocked}
+              placeholder="When to use this document"
+              onChange={(event) => setDocumentForm((current) => ({ ...current, description: event.target.value }))}
+            />
+          </label>
+        </div>
+        <div className="button-row">
+          <button className="primary" disabled={!profile || !encryptionStatus?.unlocked} onClick={saveDocumentMetadata}>
+            Save document metadata
+          </button>
+          <button disabled={!profile || !encryptionStatus?.unlocked} onClick={() => setDocumentForm(defaultDocumentForm())}>
+            Clear form
           </button>
         </div>
       </section>
@@ -327,7 +1072,7 @@ function App() {
         <div className="summary-grid">
           <span>{scan?.platform.label ?? "No scan"}</span>
           <span>{scan?.fields.length ?? 0} fields</span>
-          <button disabled={!scan || !profile} onClick={buildPlan}>
+          <button disabled={!scan || !profile || isCopyOnly || !encryptionStatus?.unlocked} onClick={buildPlan}>
             Build fill plan
           </button>
         </div>
@@ -344,6 +1089,30 @@ function App() {
         </div>
       </section>
 
+      {isCopyOnly ? (
+        <section className="section">
+          <h2>LinkedIn Copy Assist</h2>
+          <p className="help-text">
+            LinkedIn is restricted. This extension will not scan, modify, or fill LinkedIn pages. Copy profile snippets here and paste
+            them manually.
+          </p>
+          <div className="field-list">
+            {profileSnippets.map((snippet) => (
+              <div key={snippet.id} className="snippet-row">
+                <div>
+                  <strong>{snippet.label}</strong>
+                  {snippet.description ? <small>{snippet.description}</small> : null}
+                  <pre>{snippet.value}</pre>
+                </div>
+                <button onClick={() => copySnippet(snippet.label, snippet.value)}>Copy</button>
+              </div>
+            ))}
+            {profile && profileSnippets.length === 0 ? <p className="help-text">No copyable profile fields are available.</p> : null}
+            {!profile ? <p className="help-text">Save a profile to enable copy snippets.</p> : null}
+          </div>
+        </section>
+      ) : null}
+
       <section className="section">
         <h2>Diagnostics</h2>
         <div className="diagnostics-grid">
@@ -353,10 +1122,13 @@ function App() {
           <span>Planned: {diagnostics.stepCount}</span>
           <span>Warnings: {diagnostics.warningCount}</span>
           <span>Saved mappings: {diagnostics.overrideCount}</span>
+          <span>Permission: {diagnostics.permissionState}</span>
+          <span>Restricted: {diagnostics.restricted}</span>
+          <span>Copy-only: {diagnostics.copyOnly}</span>
         </div>
       </section>
 
-      <section className="section">
+      {!isCopyOnly ? <section className="section">
         <h2>Fill Plan</h2>
         <div className="summary-grid">
           <span>{counts.auto} auto</span>
@@ -389,7 +1161,7 @@ function App() {
                     <span className={`status-pill status-${stepStatus(effectiveStep)}`}>{stepStatus(effectiveStep)}</span>
                   </div>
                   <small>
-                    {currentKey ?? "No mapping"} - {valuePreview(effectiveStep)}
+                    {currentKey ?? "No mapping"} - {valuePreview(effectiveStep, effectiveProfile)}
                     {"confidence" in effectiveStep ? ` - ${Math.round(effectiveStep.confidence * 100)}%` : ""}
                     {effectiveStep.requiresReview ? " - review required" : ""}
                   </small>
@@ -420,7 +1192,7 @@ function App() {
         <button className="primary" disabled={!effectivePlan} onClick={fillAccepted}>
           Fill accepted fields
         </button>
-      </section>
+      </section> : null}
     </main>
   );
 }

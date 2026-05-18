@@ -1,15 +1,32 @@
-import { adapterForId } from "@job-helper/adapters";
-import type { ExtensionMessage, ExtensionResponse } from "@job-helper/shared";
+import { adapterForId, adapters } from "@job-helper/adapters";
+import type { ExtensionMessage, ExtensionResponse, PlatformDetection } from "@job-helper/shared";
+import { acceptFirstRunConsent, getFirstRunConsent } from "../storage/complianceStore";
 import {
   deleteAllData,
+  deleteProfile,
+  deleteProfileVariant,
   deleteSiteOverride,
   exportSelectedProfile,
+  getEncryptionStatus,
   getSelectedProfile,
   getSiteOverride,
+  isProfileStoreUnlocked,
+  listProfileVariants,
+  listProfiles,
+  lockProfileStore,
   saveProfile,
-  saveSiteOverride
+  saveProfileVariant,
+  saveSiteOverride,
+  selectProfile,
+  selectProfileVariant,
+  selectedProfileVariant,
+  setProfilePassphrase,
+  unlockProfileStore
 } from "../storage/profileStore";
+import { applyProfileVariant } from "../storage/profileVariants";
 import contentScript from "../content/index?script";
+import { isLinkedInUrl, linkedInCopyOnlyPlatform, linkedInScanResponse } from "./linkedinGuard";
+import { ensureHostPermission, hostPermissionState } from "./permissions";
 
 async function activeTab(): Promise<chrome.tabs.Tab> {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
@@ -35,6 +52,32 @@ function hostnameFromUrl(url: string | undefined): string {
   }
 }
 
+async function detectPlatformFromUrl(url: string | undefined): Promise<PlatformDetection> {
+  if (isLinkedInUrl(url)) return linkedInCopyOnlyPlatform;
+  const safeUrl = url ?? "about:blank";
+  const hostname = hostnameFromUrl(safeUrl);
+  for (const adapter of adapters) {
+    const detection = await adapter.detect({ url: safeUrl, hostname });
+    if (detection.confidence > 0) return detection;
+  }
+  return { adapterId: "generic-html-form", label: "Generic HTML form", confidence: 0.4 };
+}
+
+async function activeTabComplianceStatus() {
+  const tab = await activeTab();
+  const url = tab.url ?? "about:blank";
+  return {
+    url,
+    platform: await detectPlatformFromUrl(url),
+    permissionState: await hostPermissionState(url)
+  };
+}
+
+async function requireFirstRunConsent(): Promise<void> {
+  const consent = await getFirstRunConsent();
+  if (!consent.accepted) throw new Error("Review and accept the privacy disclosure before using autofill.");
+}
+
 chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendResponse) => {
   void (async () => {
     try {
@@ -43,7 +86,90 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         return;
       }
 
+      if (message.type === "LIST_PROFILES") {
+        sendResponse({ ok: true, type: message.type, profiles: await listProfiles() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "SELECT_PROFILE") {
+        const result = await selectProfile(message.profileId);
+        sendResponse({ ok: true, type: message.type, ...result } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "DELETE_PROFILE") {
+        const result = await deleteProfile(message.profileId);
+        sendResponse({ ok: true, type: message.type, ...result } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "LIST_PROFILE_VARIANTS") {
+        sendResponse({ ok: true, type: message.type, ...(await listProfileVariants(message.baseProfileId)) } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "SAVE_PROFILE_VARIANT") {
+        sendResponse({ ok: true, type: message.type, ...(await saveProfileVariant(message.variant)) } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "SELECT_PROFILE_VARIANT") {
+        sendResponse({
+          ok: true,
+          type: message.type,
+          ...(await selectProfileVariant(message.baseProfileId, message.variantId))
+        } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "DELETE_PROFILE_VARIANT") {
+        sendResponse({
+          ok: true,
+          type: message.type,
+          ...(await deleteProfileVariant(message.baseProfileId, message.variantId))
+        } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "GET_FIRST_RUN_CONSENT") {
+        sendResponse({ ok: true, type: message.type, consent: await getFirstRunConsent() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "ACCEPT_FIRST_RUN_CONSENT") {
+        sendResponse({ ok: true, type: message.type, consent: await acceptFirstRunConsent() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "GET_ACTIVE_TAB_STATUS") {
+        sendResponse({ ok: true, type: message.type, status: await activeTabComplianceStatus() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "GET_ENCRYPTION_STATUS") {
+        sendResponse({ ok: true, type: message.type, status: await getEncryptionStatus() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "SET_PASSPHRASE") {
+        const result = await setProfilePassphrase(message.passphrase);
+        sendResponse({ ok: true, type: message.type, ...result } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "UNLOCK_PROFILE_STORE") {
+        const result = await unlockProfileStore(message.passphrase);
+        sendResponse({ ok: true, type: message.type, ...result } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "LOCK_PROFILE_STORE") {
+        sendResponse({ ok: true, type: message.type, status: await lockProfileStore() } satisfies ExtensionResponse);
+        return;
+      }
+
       if (message.type === "SAVE_PROFILE") {
+        await requireFirstRunConsent();
         sendResponse({ ok: true, type: message.type, profile: await saveProfile(message.profile) } satisfies ExtensionResponse);
         return;
       }
@@ -78,22 +204,40 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
       }
 
       if (message.type === "SCAN_PAGE") {
+        await requireFirstRunConsent();
+        const tab = await activeTab();
+        if (isLinkedInUrl(tab.url)) {
+          sendResponse(linkedInScanResponse(tab.url ?? "about:blank"));
+          return;
+        }
+        await ensureHostPermission(tab.url);
         sendResponse(await sendToActiveTab(message));
         return;
       }
 
       if (message.type === "BUILD_FILL_PLAN") {
+        await requireFirstRunConsent();
+        if (!isProfileStoreUnlocked()) throw new Error("Profile store is locked. Unlock profiles before building a fill plan.");
         const tab = await activeTab();
         const adapter = adapterForId(message.platform.adapterId);
         const hostname = hostnameFromUrl(tab.url);
         const siteOverride = hostname ? await getSiteOverride(hostname, message.platform.adapterId) : null;
         const options = { siteOverride };
-        const plan = await adapter.buildFillPlan(message.fields, message.profile, options, tab.url ?? "about:blank");
+        const variant = await selectedProfileVariant(message.profile.meta.profileId);
+        const plan = await adapter.buildFillPlan(
+          message.fields,
+          applyProfileVariant(message.profile, variant),
+          options,
+          tab.url ?? "about:blank"
+        );
         sendResponse({ ok: true, type: message.type, plan, options } satisfies ExtensionResponse);
         return;
       }
 
       if (message.type === "EXECUTE_FILL_PLAN") {
+        await requireFirstRunConsent();
+        const tab = await activeTab();
+        if (!isLinkedInUrl(tab.url)) await ensureHostPermission(tab.url);
         sendResponse(await sendToActiveTab(message));
         return;
       }

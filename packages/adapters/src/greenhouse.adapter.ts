@@ -126,7 +126,8 @@ export const greenhouseAdapter: AtsAdapter = {
     const customQuestionElementIds = new Set(customQuestionFields.map((field) => field.elementId));
     const genericMatches = matchFields(
       remainingFields.filter((field) => !exactElementIds.has(field.elementId) && !customQuestionElementIds.has(field.elementId)),
-      "greenhouse"
+      "greenhouse",
+      { locales: [profile.meta.locale] }
     );
 
     const manualSteps = customQuestionFields.map(manualQuestionStep);

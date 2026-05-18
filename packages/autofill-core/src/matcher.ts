@@ -1,7 +1,12 @@
 import type { FieldMatch, FormFieldNode, MatchEvidence } from "@job-helper/shared";
 import { confidenceWeights } from "./confidence";
 import { fieldSynonyms, isSensitiveField } from "./fieldOntology";
+import { resolveEffectiveSynonyms } from "./labelDictionaries";
 import { includesNormalized, normalizeText } from "./normalize";
+
+export type MatchLocaleOptions = {
+  locales?: string[];
+};
 
 function evidence(type: MatchEvidence["type"], text: string): MatchEvidence {
   return { type, text, weight: confidenceWeights[type] };
@@ -47,10 +52,11 @@ function bestEvidenceForSynonym(node: FormFieldNode, synonym: string): MatchEvid
   return undefined;
 }
 
-export function matchField(node: FormFieldNode, adapterId = "generic-html-form"): FieldMatch | undefined {
+export function matchField(node: FormFieldNode, adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch | undefined {
   let best: FieldMatch | undefined;
+  const synonymsByKey = options.locales?.length ? resolveEffectiveSynonyms(options.locales) : fieldSynonyms;
 
-  for (const [canonicalKey, synonyms] of Object.entries(fieldSynonyms)) {
+  for (const [canonicalKey, synonyms] of Object.entries(synonymsByKey)) {
     const evidences = synonyms
       .map((synonym) => bestEvidenceForSynonym(node, synonym))
       .filter(Boolean) as MatchEvidence[];
@@ -78,9 +84,9 @@ export function matchField(node: FormFieldNode, adapterId = "generic-html-form")
   return best;
 }
 
-export function matchFields(nodes: FormFieldNode[], adapterId = "generic-html-form"): FieldMatch[] {
+export function matchFields(nodes: FormFieldNode[], adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch[] {
   return nodes
-    .map((node) => matchField(node, adapterId))
+    .map((node) => matchField(node, adapterId, options))
     .filter((match): match is FieldMatch => Boolean(match))
     .sort((a, b) => b.confidence - a.confidence);
 }

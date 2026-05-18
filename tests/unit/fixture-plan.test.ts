@@ -7,6 +7,26 @@ import { scanFormFields } from "@job-helper/dom-utils";
 
 const fixtures: Record<string, string[]> = {
   "generic-form.html": ["personal.firstName", "personal.lastName", "personal.email", "personal.phone", "personal.links.linkedin", "skills"],
+  "generic-german.html": [
+    "personal.firstName",
+    "personal.lastName",
+    "personal.phone",
+    "personal.address.line1",
+    "personal.address.postalCode",
+    "documents.resume",
+    "documents.coverLetter",
+    "workExperience.company",
+    "education.institution",
+    "skills"
+  ],
+  "generic-mixed-language.html": [
+    "personal.firstName",
+    "personal.lastName",
+    "personal.email",
+    "personal.phone",
+    "personal.links.portfolio",
+    "skills"
+  ],
   "greenhouse-basic.html": ["personal.firstName", "personal.lastName", "personal.email", "personal.phone", "documents.resume"],
   "greenhouse-uploads.html": ["personal.firstName", "personal.lastName", "documents.resume", "documents.coverLetter"],
   "greenhouse-custom-questions.html": ["personal.firstName", "personal.email"],

@@ -42,6 +42,18 @@ select {
   padding: 0 8px;
 }
 
+.text-input {
+  min-height: 36px;
+  min-width: 0;
+  flex: 1;
+  border: 1px solid #cbd5e1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17202a;
+  font: inherit;
+  padding: 0 10px;
+}
+
 .primary {
   border-color: #1d4ed8;
   background: #1d4ed8;
@@ -89,7 +101,8 @@ h2 {
 
 header p,
 small,
-.meta-list {
+.meta-list,
+.help-text {
   color: #64748b;
 }
 
@@ -134,6 +147,21 @@ small,
   padding-top: 16px;
 }
 
+.consent-card {
+  border-top: 0;
+  margin-top: 24px;
+}
+
+.consent-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding-left: 20px;
+  color: #334155;
+  font-size: 13px;
+  line-height: 1.45;
+}
+
 .json-editor {
   min-height: 180px;
   width: 100%;
@@ -145,12 +173,42 @@ small,
   font-size: 12px;
 }
 
+.compact-editor {
+  min-height: 120px;
+}
+
 .button-row,
-.summary-grid {
+.summary-grid,
+.profile-selector-row {
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
   align-items: center;
+}
+
+.profile-selector-row select {
+  flex: 1;
+}
+
+.document-selector-grid,
+.document-form-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.document-selector-grid label,
+.document-form-grid label {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  color: #64748b;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.document-form-grid .full-width {
+  grid-column: 1 / -1;
 }
 
 .summary-grid span {
@@ -182,7 +240,9 @@ small,
 }
 
 .field-row,
-.plan-row {
+.plan-row,
+.snippet-row,
+.document-row {
   display: flex;
   align-items: flex-start;
   gap: 10px;
@@ -205,14 +265,56 @@ small,
 }
 
 .field-row strong,
-.plan-row strong {
+.plan-row strong,
+.snippet-row strong,
+.document-row strong {
   display: block;
   font-size: 13px;
 }
 
 .field-row span,
-.plan-row small {
+.plan-row small,
+.snippet-row small,
+.document-row small {
   font-size: 12px;
+}
+
+.help-text {
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.snippet-row {
+  justify-content: space-between;
+}
+
+.snippet-row div,
+.document-row div:first-child {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.document-row {
+  justify-content: space-between;
+}
+
+.document-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.snippet-row pre {
+  max-height: 96px;
+  margin: 0;
+  overflow: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 12px;
+  color: #334155;
 }
 
 .plan-row-body {
