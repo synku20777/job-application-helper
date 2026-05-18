@@ -1,5 +1,5 @@
 import type { CandidateProfile } from "@job-helper/profile-schema";
-import type { FillOptions, FillPlan, FillResult, FormFieldNode, PlatformDetection } from "@job-helper/shared";
+import type { FillOptions, FillPlan, FillResult, FieldCandidate, SerializableFieldCandidate, PlatformDetection } from "@job-helper/shared";
 
 export type AdapterDetectContext = {
   url: string;
@@ -20,7 +20,7 @@ export interface AtsAdapter {
   priority: number;
   copyOnly?: boolean;
   detect(context: AdapterDetectContext): Promise<PlatformDetection>;
-  scan(context: AdapterScanContext): Promise<FormFieldNode[]>;
-  buildFillPlan(fields: FormFieldNode[], profile: CandidateProfile, options: FillOptions, url: string): Promise<FillPlan>;
+  scan(context: AdapterScanContext): Promise<FieldCandidate[]>;
+  buildFillPlan(fields: SerializableFieldCandidate[], profile: CandidateProfile, options: FillOptions, url: string): Promise<FillPlan>;
   executeFillPlan(plan: FillPlan, context: FillExecutionContext, acceptedElementIds: string[]): Promise<FillResult>;
 }

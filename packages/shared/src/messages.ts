@@ -5,7 +5,7 @@ import type {
   FillPlan,
   FillResult,
   FirstRunConsentStatus,
-  FormFieldNode,
+  SerializableFieldCandidate,
   PlatformDetection,
   ProfileVariant,
   ProfileVariantSummary,
@@ -17,7 +17,7 @@ import type { CandidateProfile } from "@job-helper/profile-schema";
 
 export type ExtensionMessage =
   | { type: "SCAN_PAGE" }
-  | { type: "BUILD_FILL_PLAN"; profile: CandidateProfile; fields: FormFieldNode[]; platform: PlatformDetection }
+  | { type: "BUILD_FILL_PLAN"; profile: CandidateProfile; fields: SerializableFieldCandidate[]; platform: PlatformDetection }
   | { type: "EXECUTE_FILL_PLAN"; plan: FillPlan; acceptedElementIds: string[] }
   | { type: "GET_SELECTED_PROFILE" }
   | { type: "LIST_PROFILES" }
@@ -42,7 +42,7 @@ export type ExtensionMessage =
   | { type: "DELETE_ALL_DATA" };
 
 export type ExtensionResponse =
-  | { ok: true; type: "SCAN_PAGE"; fields: FormFieldNode[]; platform: PlatformDetection; url: string }
+  | { ok: true; type: "SCAN_PAGE"; fields: SerializableFieldCandidate[]; platform: PlatformDetection; url: string }
   | { ok: true; type: "BUILD_FILL_PLAN"; plan: FillPlan; options?: FillOptions }
   | { ok: true; type: "EXECUTE_FILL_PLAN"; result: FillResult }
   | { ok: true; type: "GET_SELECTED_PROFILE"; profile: CandidateProfile | null }

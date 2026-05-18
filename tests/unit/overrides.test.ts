@@ -1,27 +1,59 @@
 import { describe, expect, it } from "vitest";
 import { buildFillPlan } from "@job-helper/autofill-core";
 import { sampleProfile } from "@job-helper/profile-schema";
-import type { FormFieldNode, SiteMappingOverride } from "@job-helper/shared";
+import type { SerializableFieldCandidate, SiteMappingOverride } from "@job-helper/shared";
 
-function field(overrides: Partial<FormFieldNode>): FormFieldNode {
+function field(overrides: {
+  id?: string;
+  selector?: string;
+  tagName?: string;
+  type?: string;
+  label?: string;
+  ariaLabel?: string;
+  placeholder?: string;
+  name?: string;
+  nearbyText?: string[];
+  sectionTitle?: string;
+  formTitle?: string;
+  visible?: boolean;
+  disabled?: boolean;
+} = {}): SerializableFieldCandidate {
+  const candidateId = overrides.id ?? "field-1";
   return {
-    elementId: overrides.elementId ?? "field-1",
-    selector: overrides.selector ?? "#field-1",
-    tagName: overrides.tagName ?? "input",
-    inputType: overrides.inputType ?? "text",
-    associatedLabelText: overrides.associatedLabelText,
-    ariaLabel: overrides.ariaLabel,
-    ariaLabelledByText: overrides.ariaLabelledByText,
-    placeholder: overrides.placeholder,
-    name: overrides.name,
-    id: overrides.id,
-    nearbyText: overrides.nearbyText ?? [],
-    sectionHeading: overrides.sectionHeading,
-    formHeading: overrides.formHeading,
-    options: overrides.options,
-    required: overrides.required,
-    visible: overrides.visible ?? true,
-    disabled: overrides.disabled ?? false
+    id: candidateId,
+    controlType: "text",
+    dom: {
+      tagName: overrides.tagName ?? "input",
+      type: overrides.type ?? "text",
+      id: candidateId,
+      name: overrides.name,
+      placeholder: overrides.placeholder,
+      selector: overrides.selector ?? `#${candidateId}`,
+    },
+    accessibility: {
+      label: overrides.label,
+      ariaLabel: overrides.ariaLabel,
+      required: false,
+    },
+    context: {
+      nearbyText: overrides.nearbyText ?? [],
+      previousText: [],
+      nextText: [],
+      sectionTitle: overrides.sectionTitle,
+      formTitle: overrides.formTitle,
+    },
+    geometry: {
+      x: 0,
+      y: 0,
+      width: 100,
+      height: 30,
+      visible: overrides.visible ?? true,
+    },
+    state: {
+      disabled: overrides.disabled ?? false,
+      readonly: false,
+      empty: true,
+    },
   };
 }
 
@@ -39,7 +71,7 @@ function siteOverride(fields: SiteMappingOverride["fields"]): SiteMappingOverrid
 describe("site mapping overrides", () => {
   it("uses selector overrides before generic matching", () => {
     const plan = buildFillPlan(
-      [field({ selector: "#first_name", associatedLabelText: "First name" })],
+      [field({ id: "first_name", selector: "#first_name", label: "First name" })],
       sampleProfile,
       { adapterId: "generic-html-form", label: "Generic form", confidence: 0.5 },
       "https://example.test/jobs/1",
@@ -69,7 +101,7 @@ describe("site mapping overrides", () => {
 
   it("uses label overrides for ambiguous fields", () => {
     const plan = buildFillPlan(
-      [field({ selector: "#candidate_link", associatedLabelText: "Profile" })],
+      [field({ id: "candidate_link", selector: "#candidate_link", label: "Profile" })],
       sampleProfile,
       { adapterId: "generic-html-form", label: "Generic form", confidence: 0.5 },
       "https://example.test/jobs/1",
@@ -97,7 +129,7 @@ describe("site mapping overrides", () => {
 
   it("keeps sensitive override mappings review-required", () => {
     const plan = buildFillPlan(
-      [field({ selector: "#gender", associatedLabelText: "Gender" })],
+      [field({ id: "gender", selector: "#gender", label: "Gender" })],
       sampleProfile,
       { adapterId: "generic-html-form", label: "Generic form", confidence: 0.5 },
       "https://example.test/jobs/1",

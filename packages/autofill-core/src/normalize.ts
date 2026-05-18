@@ -13,5 +13,6 @@ export function normalizeText(value: string | undefined | null): string {
 export function includesNormalized(source: string | undefined, candidate: string): boolean {
   const normalizedSource = normalizeText(source);
   const normalizedCandidate = normalizeText(candidate);
-  return Boolean(normalizedCandidate) && normalizedSource.includes(normalizedCandidate);
+  if (!normalizedCandidate) return false;
+  return ` ${normalizedSource} `.includes(` ${normalizedCandidate} `);
 }

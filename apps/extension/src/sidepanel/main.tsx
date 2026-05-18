@@ -10,7 +10,7 @@ import type {
   FillPlan,
   FillStep,
   FirstRunConsentStatus,
-  FormFieldNode,
+  SerializableFieldCandidate,
   PlatformDetection,
   ProfileVariant,
   ProfileVariantSummary,
@@ -30,7 +30,7 @@ import { applyProfileVariant, validateVariantOverrides } from "../storage/profil
 import "../ui.css";
 
 type ScanState = {
-  fields: FormFieldNode[];
+  fields: SerializableFieldCandidate[];
   platform: PlatformDetection;
   url: string;
 };
@@ -43,7 +43,7 @@ function selectedAutoSteps(plan: FillPlan | null): string[] {
   return (
     plan?.steps
       .filter((step) => step.type !== "manual" && step.type !== "uploadFile" && !step.requiresReview)
-      .map((step) => step.target.elementId) ?? []
+      .map((step) => step.target.candidateId) ?? []
   );
 }
 
@@ -189,12 +189,12 @@ function App() {
     if (response.ok && response.type === "GET_ACTIVE_TAB_STATUS") setActiveTabStatus(response.status);
   }
 
-  function fieldForStep(step: FillStep): FormFieldNode | undefined {
-    return scan?.fields.find((field) => field.elementId === step.target.elementId);
+  function fieldForStep(step: FillStep): SerializableFieldCandidate | undefined {
+    return scan?.fields.find((field) => field.id === step.target.candidateId);
   }
 
   function applyDraftToStep(step: FillStep): FillStep {
-    const draftKey = mappingDrafts[step.target.elementId];
+    const draftKey = mappingDrafts[step.target.candidateId];
     if (!draftKey || !effectiveProfile || !plan) return step;
 
     const field = fieldForStep(step);
@@ -202,12 +202,12 @@ function App() {
 
     return stepFromMatch(
       {
-        elementId: field.elementId,
+        candidateId: field.id,
         canonicalKey: draftKey,
         confidence: 1,
         evidence: [{ type: "userOverride", text: step.target.label, weight: 1 }],
         adapterId: plan.adapterId,
-        fillable: field.visible && !field.disabled,
+        fillable: field.geometry.visible && !field.state.disabled,
         requiresReview: isSensitiveField(draftKey),
         node: field
       },
@@ -425,20 +425,20 @@ function App() {
     }
   }
 
-  function toggleAccepted(elementId: string) {
+  function toggleAccepted(candidateId: string) {
     setAccepted((current) => {
       const next = new Set(current);
-      if (next.has(elementId)) next.delete(elementId);
-      else next.add(elementId);
+      if (next.has(candidateId)) next.delete(candidateId);
+      else next.add(candidateId);
       return next;
     });
   }
 
-  function changeMapping(elementId: string, canonicalKey: CanonicalFieldKey) {
-    setMappingDrafts((current) => ({ ...current, [elementId]: canonicalKey }));
+  function changeMapping(candidateId: string, canonicalKey: CanonicalFieldKey) {
+    setMappingDrafts((current) => ({ ...current, [candidateId]: canonicalKey }));
     setAccepted((current) => {
       const next = new Set(current);
-      next.delete(elementId);
+      next.delete(candidateId);
       return next;
     });
   }
@@ -467,13 +467,13 @@ function App() {
         current
           ? {
               ...current,
-              steps: current.steps.map((candidate) => (candidate.target.elementId === step.target.elementId ? savedStep : candidate))
+              steps: current.steps.map((candidate) => (candidate.target.candidateId === step.target.candidateId ? savedStep : candidate))
             }
           : current
       );
       setMappingDrafts((current) => {
         const next = { ...current };
-        delete next[step.target.elementId];
+        delete next[step.target.candidateId];
         return next;
       });
       setStatus("Mapping saved for this site.");
@@ -1078,11 +1078,11 @@ function App() {
         </div>
         <div className="field-list">
           {(scan?.fields ?? []).slice(0, 20).map((field) => (
-            <div key={field.elementId} className="field-row">
-              <strong>{field.associatedLabelText ?? field.ariaLabel ?? field.placeholder ?? field.name ?? field.tagName}</strong>
+            <div key={field.id} className="field-row">
+              <strong>{field.accessibility.label ?? field.accessibility.ariaLabel ?? field.dom.placeholder ?? field.dom.name ?? field.dom.tagName}</strong>
               <span>
-                {field.tagName}
-                {field.inputType ? `/${field.inputType}` : ""}
+                {field.dom.tagName}
+                {field.dom.type ? `/${field.dom.type}` : ""}
               </span>
             </div>
           ))}
@@ -1137,22 +1137,22 @@ function App() {
         </div>
         <div className="field-list">
           {(effectivePlan?.steps ?? []).map((effectiveStep) => {
-            const originalStep = plan?.steps.find((step) => step.target.elementId === effectiveStep.target.elementId) ?? effectiveStep;
+            const originalStep = plan?.steps.find((step) => step.target.candidateId === effectiveStep.target.candidateId) ?? effectiveStep;
             const currentKey = stepCanonicalKey(effectiveStep);
             const originalKey = stepCanonicalKey(originalStep);
-            const draftChanged = Boolean(mappingDrafts[effectiveStep.target.elementId] && currentKey !== originalKey);
+            const draftChanged = Boolean(mappingDrafts[effectiveStep.target.candidateId] && currentKey !== originalKey);
             const fillable = canFill(effectiveStep);
 
             return (
               <div
-                key={`${effectiveStep.target.elementId}-${effectiveStep.type}`}
+                key={`${effectiveStep.target.candidateId}-${effectiveStep.type}`}
                 className={`plan-row plan-row-${effectiveStep.type}${effectiveStep.requiresReview ? " plan-row-review" : ""}`}
               >
                 <input
                   type="checkbox"
                   disabled={!fillable}
-                  checked={accepted.has(effectiveStep.target.elementId)}
-                  onChange={() => toggleAccepted(effectiveStep.target.elementId)}
+                  checked={accepted.has(effectiveStep.target.candidateId)}
+                  onChange={() => toggleAccepted(effectiveStep.target.candidateId)}
                   title={fillable ? "Include this field" : "Manual fields cannot be filled automatically"}
                 />
                 <div className="plan-row-body">
@@ -1169,7 +1169,7 @@ function App() {
                     <select
                       value={currentKey ?? ""}
                       disabled={effectiveStep.type === "uploadFile"}
-                      onChange={(event) => changeMapping(effectiveStep.target.elementId, event.target.value as CanonicalFieldKey)}
+                      onChange={(event) => changeMapping(effectiveStep.target.candidateId, event.target.value as CanonicalFieldKey)}
                     >
                       <option value="" disabled>
                         Select mapping

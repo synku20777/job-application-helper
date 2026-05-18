@@ -1,6 +1,6 @@
 import { buildFillPlanFromMatches, isSensitiveField, matchFields, matchFieldsWithOverrides, normalizeText } from "@job-helper/autofill-core";
 import { executeFillPlan, scanFormFields } from "@job-helper/dom-utils";
-import type { CanonicalFieldKey, FieldMatch, FillStep, FormFieldNode, MatchEvidence } from "@job-helper/shared";
+import type { CanonicalFieldKey, FieldMatch, FillStep, FieldCandidate, SerializableFieldCandidate, MatchEvidence } from "@job-helper/shared";
 import type { AdapterDetectContext, AtsAdapter } from "./baseAdapter";
 
 export type WorkdayPageState = "applicationForm" | "loginAccount" | "reviewSubmit" | "assessmentCaptcha" | "unknown";
@@ -73,26 +73,26 @@ export function detectWorkdayStepKind(document: Document): WorkdayStepKind {
   return "unknown";
 }
 
-function directNodeText(node: FormFieldNode): string {
-  return [node.id, node.name, node.placeholder, node.ariaLabel, node.ariaLabelledByText, node.associatedLabelText]
+function directNodeText(node: SerializableFieldCandidate): string {
+  return [node.id, node.dom.name, node.dom.placeholder, node.accessibility.ariaLabel, node.accessibility.ariaLabelledBy, node.accessibility.label]
     .filter(Boolean)
     .join(" ");
 }
 
-function contextText(node: FormFieldNode): string {
-  return [node.sectionHeading, node.formHeading, ...node.nearbyText].filter(Boolean).join(" ");
+function contextText(node: SerializableFieldCandidate): string {
+  return [node.context.sectionTitle, node.context.formTitle, ...node.context.nearbyText].filter(Boolean).join(" ");
 }
 
-function nodeSearchText(node: FormFieldNode): string {
-  return [directNodeText(node), contextText(node), node.selector, ...(node.options ?? [])].filter(Boolean).join(" ");
+function nodeSearchText(node: SerializableFieldCandidate): string {
+  return [directNodeText(node), contextText(node), node.dom.selector, ...(node.options ?? [])].filter(Boolean).join(" ");
 }
 
-function firstPatternMatch(node: FormFieldNode, fields: Array<{ key: CanonicalFieldKey; patterns: RegExp[] }>): CanonicalFieldKey | undefined {
+function firstPatternMatch(node: SerializableFieldCandidate, fields: Array<{ key: CanonicalFieldKey; patterns: RegExp[] }>): CanonicalFieldKey | undefined {
   const text = directNodeText(node);
   return fields.find((field) => field.patterns.some((pattern) => pattern.test(text)))?.key;
 }
 
-function workdayExactKey(node: FormFieldNode): CanonicalFieldKey | undefined {
+function workdayExactKey(node: SerializableFieldCandidate): CanonicalFieldKey | undefined {
   const context = contextText(node);
   if (/\b(education|school|university)\b/i.test(context)) {
     const key = firstPatternMatch(node, educationFields);
@@ -106,43 +106,43 @@ function workdayExactKey(node: FormFieldNode): CanonicalFieldKey | undefined {
   return firstPatternMatch(node, commonWorkdayFields);
 }
 
-function exactMatch(node: FormFieldNode, canonicalKey: CanonicalFieldKey): FieldMatch {
+function exactMatch(node: SerializableFieldCandidate, canonicalKey: CanonicalFieldKey): FieldMatch {
   const evidence: MatchEvidence = {
     type: "exactAdapterSelector",
-    text: node.name ?? node.id ?? node.associatedLabelText ?? canonicalKey,
+    text: node.dom.name ?? node.id ?? node.accessibility.label ?? canonicalKey,
     weight: 1
   };
 
   return {
-    elementId: node.elementId,
+    candidateId: node.id,
     canonicalKey,
     confidence: 1,
     evidence: [evidence],
     adapterId: "workday",
-    fillable: node.visible && !node.disabled,
+    fillable: node.geometry.visible && !node.state.disabled,
     requiresReview: canonicalKey.startsWith("documents.") || isSensitiveField(canonicalKey),
     node
   };
 }
 
-function targetFor(node: FormFieldNode, fallbackLabel: string) {
+function targetFor(node: SerializableFieldCandidate, fallbackLabel: string) {
   return {
-    elementId: node.elementId,
-    selector: node.selector,
-    label: node.associatedLabelText ?? node.ariaLabel ?? node.ariaLabelledByText ?? node.placeholder ?? node.name ?? fallbackLabel
+    candidateId: node.id,
+    selector: node.dom.selector ?? "",
+    label: node.accessibility.label ?? node.accessibility.ariaLabel ?? node.accessibility.ariaLabelledBy ?? node.dom.placeholder ?? node.dom.name ?? fallbackLabel
   };
 }
 
-function isButtonLike(node: FormFieldNode): boolean {
-  return node.inputType === "hidden" || node.inputType === "submit" || node.inputType === "button";
+function isButtonLike(node: SerializableFieldCandidate): boolean {
+  return node.dom.type === "hidden" || node.dom.type === "submit" || node.dom.type === "button";
 }
 
-function isUnsupportedDynamicWidget(node: FormFieldNode): boolean {
-  return node.role === "combobox" && node.tagName !== "select";
+function isUnsupportedDynamicWidget(node: SerializableFieldCandidate): boolean {
+  return node.dom.role === "combobox" && node.dom.tagName !== "select";
 }
 
-function isManualWorkdayField(node: FormFieldNode): boolean {
-  if (!node.visible || node.disabled || isButtonLike(node)) return false;
+function isManualWorkdayField(node: SerializableFieldCandidate): boolean {
+  if (!node.geometry.visible || node.state.disabled || isButtonLike(node)) return false;
   if (isUnsupportedDynamicWidget(node)) return true;
 
   const text = nodeSearchText(node);
@@ -154,7 +154,7 @@ function isManualWorkdayField(node: FormFieldNode): boolean {
   );
 }
 
-function manualWorkdayStep(node: FormFieldNode): FillStep {
+function manualWorkdayStep(node: SerializableFieldCandidate): FillStep {
   return {
     type: "manual",
     target: targetFor(node, "Workday field"),
@@ -183,13 +183,13 @@ export const workdayAdapter: AtsAdapter = {
   async scan(context) {
     const pageState = detectWorkdayPageState(context.document);
     if (pageState === "reviewSubmit" || pageState === "assessmentCaptcha") return [];
-    return scanFormFields(context.document).filter((field) => field.visible);
+    return scanFormFields(context.document).filter((field) => field.geometry.visible);
   },
   async buildFillPlan(fields, profile, options, url) {
     const { overrideMatches, remainingFields } = matchFieldsWithOverrides(fields, "workday", options.siteOverride);
     const manualFields = remainingFields.filter(isManualWorkdayField);
-    const manualElementIds = new Set(manualFields.map((field) => field.elementId));
-    const matchableFields = remainingFields.filter((field) => !manualElementIds.has(field.elementId));
+    const manualElementIds = new Set(manualFields.map((field) => field.id));
+    const matchableFields = remainingFields.filter((field) => !manualElementIds.has(field.id));
 
     const exactMatches = matchableFields
       .filter((field) => !isUnsupportedDynamicWidget(field))
@@ -199,9 +199,9 @@ export const workdayAdapter: AtsAdapter = {
       })
       .filter((match): match is FieldMatch => Boolean(match));
 
-    const exactElementIds = new Set(exactMatches.map((match) => match.elementId));
+    const exactElementIds = new Set(exactMatches.map((match) => match.candidateId));
     const genericMatches = matchFields(
-      matchableFields.filter((field) => !exactElementIds.has(field.elementId)),
+      matchableFields.filter((field) => !exactElementIds.has(field.id)),
       "workday",
       { locales: [profile.meta.locale] }
     );

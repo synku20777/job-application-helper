@@ -1,4 +1,4 @@
-import type { FieldMatch, FormFieldNode, MatchEvidence } from "@job-helper/shared";
+import type { FieldMatch, SerializableFieldCandidate, MatchEvidence } from "@job-helper/shared";
 import { confidenceWeights } from "./confidence";
 import { fieldSynonyms, isSensitiveField } from "./fieldOntology";
 import { resolveEffectiveSynonyms } from "./labelDictionaries";
@@ -12,35 +12,35 @@ function evidence(type: MatchEvidence["type"], text: string): MatchEvidence {
   return { type, text, weight: confidenceWeights[type] };
 }
 
-function nodeText(node: FormFieldNode): string[] {
+function nodeText(node: SerializableFieldCandidate): string[] {
   return [
-    node.associatedLabelText,
-    node.ariaLabel,
-    node.ariaLabelledByText,
-    node.name,
-    node.id,
-    node.placeholder,
-    node.sectionHeading,
-    node.formHeading,
-    ...node.nearbyText,
-    ...(node.options ?? [])
-  ].filter(Boolean) as string[];
+    node.accessibility.label,
+    node.accessibility.ariaLabel,
+    node.accessibility.ariaLabelledBy,
+    node.dom.name,
+    node.dom.id,
+    node.dom.placeholder,
+    node.context.sectionTitle,
+    node.context.formTitle,
+    ...node.context.nearbyText,
+    ...(node.options?.map(opt => opt.label) ?? [])
+  ].filter((text): text is string => Boolean(text));
 }
 
-function bestEvidenceForSynonym(node: FormFieldNode, synonym: string): MatchEvidence | undefined {
-  if (includesNormalized(node.associatedLabelText, synonym)) return evidence("labelExactMatch", node.associatedLabelText ?? "");
-  if (includesNormalized(node.ariaLabel, synonym) || includesNormalized(node.ariaLabelledByText, synonym)) {
-    return evidence("ariaExactMatch", node.ariaLabel ?? node.ariaLabelledByText ?? "");
+function bestEvidenceForSynonym(node: SerializableFieldCandidate, synonym: string): MatchEvidence | undefined {
+  if (includesNormalized(node.accessibility.label, synonym)) return evidence("labelExactMatch", node.accessibility.label ?? "");
+  if (includesNormalized(node.accessibility.ariaLabel, synonym) || includesNormalized(node.accessibility.ariaLabelledBy, synonym)) {
+    return evidence("ariaExactMatch", node.accessibility.ariaLabel ?? node.accessibility.ariaLabelledBy ?? "");
   }
-  if (includesNormalized(node.name, synonym) || includesNormalized(node.id, synonym)) {
-    return evidence("nameAttributeMatch", node.name ?? node.id ?? "");
+  if (includesNormalized(node.dom.name, synonym) || includesNormalized(node.dom.id, synonym)) {
+    return evidence("nameAttributeMatch", node.dom.name ?? node.dom.id ?? "");
   }
-  if (includesNormalized(node.placeholder, synonym)) return evidence("placeholderMatch", node.placeholder ?? "");
-  if (node.nearbyText.some((text) => includesNormalized(text, synonym))) {
-    return evidence("nearbyTextMatch", node.nearbyText.join(" "));
+  if (includesNormalized(node.dom.placeholder, synonym)) return evidence("placeholderMatch", node.dom.placeholder ?? "");
+  if (node.context.nearbyText.some((text: string) => includesNormalized(text, synonym))) {
+    return evidence("nearbyTextMatch", node.context.nearbyText.join(" "));
   }
-  if (includesNormalized(node.sectionHeading, synonym) || includesNormalized(node.formHeading, synonym)) {
-    return evidence("sectionContextMatch", node.sectionHeading ?? node.formHeading ?? "");
+  if (includesNormalized(node.context.sectionTitle, synonym) || includesNormalized(node.context.formTitle, synonym)) {
+    return evidence("sectionContextMatch", node.context.sectionTitle ?? node.context.formTitle ?? "");
   }
 
   const allText = normalizeText(nodeText(node).join(" "));
@@ -52,7 +52,7 @@ function bestEvidenceForSynonym(node: FormFieldNode, synonym: string): MatchEvid
   return undefined;
 }
 
-export function matchField(node: FormFieldNode, adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch | undefined {
+export function matchField(node: SerializableFieldCandidate, adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch | undefined {
   let best: FieldMatch | undefined;
   const synonymsByKey = options.locales?.length ? resolveEffectiveSynonyms(options.locales) : fieldSynonyms;
 
@@ -68,12 +68,12 @@ export function matchField(node: FormFieldNode, adapterId = "generic-html-form",
     const requiresReview = isSensitiveField(canonicalKey as FieldMatch["canonicalKey"]) || confidence < 0.9;
 
     const candidate: FieldMatch = {
-      elementId: node.elementId,
+      candidateId: node.id,
       canonicalKey: canonicalKey as FieldMatch["canonicalKey"],
       confidence,
       evidence: sorted.slice(0, 3),
       adapterId,
-      fillable: node.visible && !node.disabled && confidence >= 0.7,
+      fillable: node.geometry.visible && !node.state.disabled && confidence >= 0.7,
       requiresReview,
       node
     };
@@ -84,7 +84,7 @@ export function matchField(node: FormFieldNode, adapterId = "generic-html-form",
   return best;
 }
 
-export function matchFields(nodes: FormFieldNode[], adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch[] {
+export function matchFields<T extends SerializableFieldCandidate>(nodes: T[], adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch[] {
   return nodes
     .map((node) => matchField(node, adapterId, options))
     .filter((match): match is FieldMatch => Boolean(match))

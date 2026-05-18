@@ -1,6 +1,6 @@
 import { buildFillPlanFromMatches, matchFields, matchFieldsWithOverrides } from "@job-helper/autofill-core";
 import { executeFillPlan, scanFormFields } from "@job-helper/dom-utils";
-import type { CanonicalFieldKey, FieldMatch, FillStep, FormFieldNode, MatchEvidence } from "@job-helper/shared";
+import type { CanonicalFieldKey, FieldMatch, FillStep, FieldCandidate, SerializableFieldCandidate, MatchEvidence } from "@job-helper/shared";
 import type { AtsAdapter, AdapterDetectContext } from "./baseAdapter";
 
 const greenhouseHosts = new Set(["boards.greenhouse.io", "job-boards.greenhouse.io"]);
@@ -20,56 +20,56 @@ function isGreenhouseHost(hostname: string): boolean {
   return greenhouseHosts.has(hostname.toLowerCase());
 }
 
-function nodeSearchText(node: FormFieldNode): string {
+function nodeSearchText(node: SerializableFieldCandidate): string {
   return [
     node.id,
-    node.name,
-    node.selector,
-    node.placeholder,
-    node.ariaLabel,
-    node.ariaLabelledByText,
-    node.associatedLabelText,
-    node.sectionHeading,
-    node.formHeading,
-    ...node.nearbyText
+    node.dom.name,
+    node.dom.selector,
+    node.dom.placeholder,
+    node.accessibility.ariaLabel,
+    node.accessibility.ariaLabelledBy,
+    node.accessibility.label,
+    node.context.sectionTitle,
+    node.context.formTitle,
+    ...node.context.nearbyText
   ]
     .filter(Boolean)
     .join(" ");
 }
 
-function nodeExactText(node: FormFieldNode): string {
-  return [node.id, node.name, node.placeholder, node.ariaLabel, node.ariaLabelledByText, node.associatedLabelText]
+function nodeExactText(node: SerializableFieldCandidate): string {
+  return [node.id, node.dom.name, node.dom.placeholder, node.accessibility.ariaLabel, node.accessibility.ariaLabelledBy, node.accessibility.label]
     .filter(Boolean)
     .join(" ");
 }
 
-function greenhouseExactKey(node: FormFieldNode): CanonicalFieldKey | undefined {
+function greenhouseExactKey(node: SerializableFieldCandidate): CanonicalFieldKey | undefined {
   const text = nodeExactText(node);
   return exactGreenhouseFields.find((field) => field.patterns.some((pattern) => pattern.test(text)))?.key;
 }
 
-function exactMatch(node: FormFieldNode, canonicalKey: CanonicalFieldKey): FieldMatch {
+function exactMatch(node: SerializableFieldCandidate, canonicalKey: CanonicalFieldKey): FieldMatch {
   const evidence: MatchEvidence = {
     type: "exactAdapterSelector",
-    text: node.name ?? node.id ?? node.associatedLabelText ?? canonicalKey,
+    text: node.dom.name ?? node.id ?? node.accessibility.label ?? canonicalKey,
     weight: 1
   };
 
   return {
-    elementId: node.elementId,
+    candidateId: node.id,
     canonicalKey,
     confidence: 1,
     evidence: [evidence],
     adapterId: "greenhouse",
-    fillable: node.visible && !node.disabled,
+    fillable: node.geometry.visible && !node.state.disabled,
     requiresReview: canonicalKey.startsWith("documents."),
     node
   };
 }
 
-function isLikelyCustomQuestion(node: FormFieldNode): boolean {
-  if (!node.visible || node.disabled) return false;
-  if (node.inputType === "hidden" || node.inputType === "submit" || node.inputType === "button") return false;
+function isLikelyCustomQuestion(node: SerializableFieldCandidate): boolean {
+  if (!node.geometry.visible || node.state.disabled) return false;
+  if (node.dom.type === "hidden" || node.dom.type === "submit" || node.dom.type === "button") return false;
 
   const text = nodeSearchText(node);
   return (
@@ -80,13 +80,13 @@ function isLikelyCustomQuestion(node: FormFieldNode): boolean {
   );
 }
 
-function manualQuestionStep(node: FormFieldNode): FillStep {
+function manualQuestionStep(node: SerializableFieldCandidate): FillStep {
   return {
     type: "manual",
     target: {
-      elementId: node.elementId,
-      selector: node.selector,
-      label: node.associatedLabelText ?? node.ariaLabel ?? node.placeholder ?? node.name ?? "Greenhouse custom question"
+      candidateId: node.id,
+      selector: node.dom.selector ?? "",
+      label: node.accessibility.label ?? node.accessibility.ariaLabel ?? node.dom.placeholder ?? node.dom.name ?? "Greenhouse custom question"
     },
     reason: "Greenhouse custom question requires manual review.",
     requiresReview: true
@@ -121,11 +121,11 @@ export const greenhouseAdapter: AtsAdapter = {
       })
       .filter((match): match is FieldMatch => Boolean(match));
 
-    const exactElementIds = new Set(exactMatches.map((match) => match.elementId));
-    const customQuestionFields = remainingFields.filter((field) => !exactElementIds.has(field.elementId) && isLikelyCustomQuestion(field));
-    const customQuestionElementIds = new Set(customQuestionFields.map((field) => field.elementId));
+    const exactElementIds = new Set(exactMatches.map((match) => match.candidateId));
+    const customQuestionFields = remainingFields.filter((field) => !exactElementIds.has(field.id) && isLikelyCustomQuestion(field));
+    const customQuestionElementIds = new Set(customQuestionFields.map((field) => field.id));
     const genericMatches = matchFields(
-      remainingFields.filter((field) => !exactElementIds.has(field.elementId) && !customQuestionElementIds.has(field.elementId)),
+      remainingFields.filter((field) => !exactElementIds.has(field.id) && !customQuestionElementIds.has(field.id)),
       "greenhouse",
       { locales: [profile.meta.locale] }
     );

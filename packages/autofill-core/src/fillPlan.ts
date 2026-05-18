@@ -4,7 +4,7 @@ import type {
   FillOptions,
   FillPlan,
   FillStep,
-  FormFieldNode,
+  SerializableFieldCandidate,
   PlatformDetection,
   SavedFieldOverride,
   SiteMappingOverride
@@ -15,27 +15,27 @@ import { matchFields } from "./matcher";
 import { normalizeText } from "./normalize";
 import { resolveProfileValue } from "./valueResolver";
 
-export function fieldDisplayLabel(node: FormFieldNode): string {
-  return node.associatedLabelText ?? node.ariaLabel ?? node.placeholder ?? node.name ?? node.id ?? node.tagName;
+export function fieldDisplayLabel(node: SerializableFieldCandidate): string {
+  return node.accessibility.label ?? node.accessibility.ariaLabel ?? node.dom.placeholder ?? node.dom.name ?? node.dom.id ?? node.dom.tagName;
 }
 
 function overrideText(override: SavedFieldOverride): string {
   return override.label ?? override.elementSelector ?? override.canonicalKey;
 }
 
-function overrideMatchesField(override: SavedFieldOverride, field: FormFieldNode): boolean {
-  if (override.elementSelector && override.elementSelector === field.selector) return true;
+function overrideMatchesField(override: SavedFieldOverride, field: SerializableFieldCandidate): boolean {
+  if (override.elementSelector && override.elementSelector === field.dom.selector) return true;
   if (!override.label) return false;
 
   const overrideLabel = normalizeText(override.label);
   return Boolean(overrideLabel) && overrideLabel === normalizeText(fieldDisplayLabel(field));
 }
 
-export function matchFieldsWithOverrides(
-  fields: FormFieldNode[],
+export function matchFieldsWithOverrides<T extends SerializableFieldCandidate>(
+  fields: T[],
   adapterId: string,
   siteOverride?: SiteMappingOverride | null
-): { overrideMatches: FieldMatch[]; remainingFields: FormFieldNode[] } {
+): { overrideMatches: FieldMatch[]; remainingFields: T[] } {
   if (!siteOverride || siteOverride.adapterId !== adapterId || siteOverride.fields.length === 0) {
     return { overrideMatches: [], remainingFields: fields };
   }
@@ -47,14 +47,14 @@ export function matchFieldsWithOverrides(
     const override = siteOverride.fields.find((candidate) => overrideMatchesField(candidate, field));
     if (!override) continue;
 
-    matchedElementIds.add(field.elementId);
+    matchedElementIds.add(field.id);
     overrideMatches.push({
-      elementId: field.elementId,
+      candidateId: field.id,
       canonicalKey: override.canonicalKey,
       confidence: 1,
       evidence: [{ type: "userOverride", text: overrideText(override), weight: 1 }],
       adapterId,
-      fillable: field.visible && !field.disabled,
+      fillable: field.geometry.visible && !field.state.disabled,
       requiresReview: isSensitiveField(override.canonicalKey),
       node: field
     });
@@ -62,14 +62,14 @@ export function matchFieldsWithOverrides(
 
   return {
     overrideMatches,
-    remainingFields: fields.filter((field) => !matchedElementIds.has(field.elementId))
+    remainingFields: fields.filter((field) => !matchedElementIds.has(field.id))
   };
 }
 
 export function targetFromMatch(match: FieldMatch) {
   return {
-    elementId: match.elementId,
-    selector: match.node.selector,
+    candidateId: match.candidateId,
+    selector: match.node.dom.selector || "",
     label: fieldDisplayLabel(match.node) || match.canonicalKey
   };
 }
@@ -109,7 +109,7 @@ export function stepFromMatch(match: FieldMatch, profile: CandidateProfile): Fil
     };
   }
 
-  if (match.node.tagName === "select") {
+  if (match.node.dom.tagName === "select") {
     return {
       type: "selectOption",
       target,
@@ -121,7 +121,7 @@ export function stepFromMatch(match: FieldMatch, profile: CandidateProfile): Fil
     };
   }
 
-  if (match.node.inputType === "checkbox" || match.node.inputType === "radio") {
+  if (match.node.dom.type === "checkbox" || match.node.dom.type === "radio") {
     if (typeof value !== "boolean") {
       return {
         type: "manual",
@@ -141,7 +141,7 @@ export function stepFromMatch(match: FieldMatch, profile: CandidateProfile): Fil
     };
   }
 
-  if (match.node.inputType === "file") {
+  if (match.node.dom.type === "file") {
     return {
       type: "manual",
       target,
@@ -178,14 +178,14 @@ export function buildFillPlanFromMatches(
     .map((match) => ({
       code: "REVIEW_REQUIRED",
       message: `${match.canonicalKey} needs review before filling.`,
-      elementId: match.elementId
+      candidateId: match.candidateId
     }));
 
   warnings.push(
     ...extraSteps.map((step) => ({
       code: step.type === "uploadFile" ? "UPLOAD_REQUIRES_USER_ACTION" : "MANUAL_FIELD",
       message: step.type === "uploadFile" ? "Document upload requires user action." : "Field requires manual review.",
-      elementId: step.target.elementId
+      candidateId: step.target.candidateId
     }))
   );
 
@@ -201,8 +201,8 @@ export function buildFillPlanFromMatches(
   };
 }
 
-export function buildFillPlan(
-  fields: FormFieldNode[],
+export function buildFillPlan<T extends SerializableFieldCandidate>(
+  fields: T[],
   profile: CandidateProfile,
   platform: PlatformDetection,
   url = "about:blank",

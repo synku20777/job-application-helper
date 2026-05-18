@@ -3,3 +3,4 @@ export * from "./inputs";
 export * from "./labels";
 export * from "./selectors";
 export * from "./scanner";
+export * from "./registry";

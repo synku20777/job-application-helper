@@ -1,36 +1,15 @@
 import type { FillPlan, FillResult, FillStep } from "@job-helper/shared";
-import { normalizeText } from "@job-helper/autofill-core";
+import { elementToDriverField, resolveDriver } from "@job-helper/autofill-core";
 import { escapeCssIdentifier } from "./selectors";
-
-export function setNativeValue(element: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  const prototype = element instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;
-  const descriptor = Object.getOwnPropertyDescriptor(prototype, "value");
-  descriptor?.set?.call(element, value);
-  element.dispatchEvent(new Event("input", { bubbles: true }));
-  element.dispatchEvent(new Event("change", { bubbles: true }));
-  element.dispatchEvent(new Event("blur", { bubbles: true }));
-}
-
-export function setSelectValue(select: HTMLSelectElement, value: string): boolean {
-  const option = Array.from(select.options).find(
-    (candidate) => normalizeText(candidate.textContent || candidate.value) === normalizeText(value)
-  );
-  if (!option) return false;
-
-  select.value = option.value;
-  select.dispatchEvent(new Event("input", { bubbles: true }));
-  select.dispatchEvent(new Event("change", { bubbles: true }));
-  return true;
-}
 
 function findTarget(step: FillStep): HTMLElement | null {
   return (
-    document.querySelector<HTMLElement>(`[data-job-autofill-id="${escapeCssIdentifier(step.target.elementId)}"]`) ??
+    document.querySelector<HTMLElement>(`[data-job-autofill-id="${escapeCssIdentifier(step.target.candidateId)}"]`) ??
     document.querySelector<HTMLElement>(step.target.selector)
   );
 }
 
-export function executeFillPlan(plan: FillPlan, acceptedElementIds: string[]): FillResult {
+export async function executeFillPlan(plan: FillPlan, acceptedElementIds: string[]): Promise<FillResult> {
   const accepted = new Set(acceptedElementIds);
   const errors: FillResult["errors"] = [];
   let completedSteps = 0;
@@ -43,49 +22,42 @@ export function executeFillPlan(plan: FillPlan, acceptedElementIds: string[]): F
       continue;
     }
 
-    if (!accepted.has(step.target.elementId)) {
+    if (!accepted.has(step.target.candidateId)) {
       skippedSteps += 1;
       continue;
     }
 
     const element = findTarget(step);
     if (!element) {
-      errors.push({ code: "FIELD_NOT_VISIBLE", message: "Field was not found on the page.", elementId: step.target.elementId });
+      errors.push({ code: "FIELD_NOT_VISIBLE", message: "Field was not found on the page.", candidateId: step.target.candidateId });
       skippedSteps += 1;
       continue;
     }
 
-    if (element.hasAttribute("disabled") || element.getAttribute("aria-disabled") === "true") {
-      errors.push({ code: "FIELD_DISABLED", message: "Field is disabled.", elementId: step.target.elementId });
+    const driverField = elementToDriverField(element, step.target.candidateId);
+    const driver = resolveDriver(driverField);
+
+    if (!driver) {
+      errors.push({ code: "UNKNOWN", message: "Unsupported field type for this fill step.", candidateId: step.target.candidateId });
       skippedSteps += 1;
       continue;
     }
 
-    if (step.type === "setText" && (element instanceof HTMLInputElement || element instanceof HTMLTextAreaElement)) {
-      setNativeValue(element, step.value);
+    let valueToFill: unknown;
+    if (step.type === "setText" || step.type === "selectOption") {
+      valueToFill = step.value;
+    } else if (step.type === "clickCheckbox") {
+      valueToFill = step.checked;
+    }
+
+    const result = await driver.fill(driverField, valueToFill, { document: document, window: window });
+    
+    if (result.status === "filled") {
       completedSteps += 1;
-      continue;
+    } else {
+      errors.push(result.error ?? { code: "UNKNOWN", message: "Driver failed to fill.", candidateId: step.target.candidateId });
+      skippedSteps += 1;
     }
-
-    if (step.type === "selectOption" && element instanceof HTMLSelectElement) {
-      if (setSelectValue(element, step.value)) completedSteps += 1;
-      else {
-        errors.push({ code: "OPTION_NOT_FOUND", message: "Matching option was not found.", elementId: step.target.elementId });
-        skippedSteps += 1;
-      }
-      continue;
-    }
-
-    if (step.type === "clickCheckbox" && element instanceof HTMLInputElement) {
-      element.checked = step.checked;
-      element.dispatchEvent(new Event("input", { bubbles: true }));
-      element.dispatchEvent(new Event("change", { bubbles: true }));
-      completedSteps += 1;
-      continue;
-    }
-
-    errors.push({ code: "UNKNOWN", message: "Unsupported field type for this fill step.", elementId: step.target.elementId });
-    skippedSteps += 1;
   }
 
   return {

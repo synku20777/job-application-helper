@@ -90,41 +90,88 @@ export type MatchEvidence = {
 };
 
 export type ElementTarget = {
-  elementId: string;
+  candidateId: string;
   selector: string;
   label: string;
 };
 
-export type FormFieldNode = {
-  elementId: string;
-  selector: string;
-  tagName: string;
-  inputType?: string;
-  role?: string;
-  name?: string;
-  id?: string;
-  placeholder?: string;
-  ariaLabel?: string;
-  ariaLabelledByText?: string;
-  associatedLabelText?: string;
-  nearbyText: string[];
-  sectionHeading?: string;
-  formHeading?: string;
-  options?: string[];
-  required?: boolean;
-  visible: boolean;
-  disabled: boolean;
+export type FieldOption = {
+  label: string;
+  value: string;
 };
 
+export type FieldCandidate = {
+  id: string;
+  element: HTMLElement;
+  controlType:
+    | "text"
+    | "textarea"
+    | "email"
+    | "phone"
+    | "number"
+    | "date"
+    | "select"
+    | "combobox"
+    | "radioGroup"
+    | "checkbox"
+    | "checkboxGroup"
+    | "file"
+    | "contenteditable"
+    | "unknown";
+  dom: {
+    tagName: string;
+    type?: string;
+    id?: string;
+    name?: string;
+    className?: string;
+    role?: string;
+    autocomplete?: string;
+    placeholder?: string;
+    selector?: string;
+  };
+  accessibility: {
+    label?: string;
+    ariaLabel?: string;
+    ariaLabelledBy?: string;
+    describedBy?: string;
+    required?: boolean;
+  };
+  context: {
+    nearbyText: string[];
+    previousText: string[];
+    nextText: string[];
+    sectionTitle?: string;
+    formTitle?: string;
+    pageTitle?: string;
+    buttonTextsNearby?: string[];
+  };
+  options?: FieldOption[];
+  geometry: {
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    visible: boolean;
+  };
+  state: {
+    disabled: boolean;
+    readonly: boolean;
+    empty: boolean;
+    currentValue?: string;
+  };
+};
+
+export type SerializableFieldCandidate = Omit<FieldCandidate, "element">;
+
 export type FieldMatch = {
-  elementId: string;
+  candidateId: string;
   canonicalKey: CanonicalFieldKey;
   confidence: number;
   evidence: MatchEvidence[];
   adapterId: string;
   fillable: boolean;
   requiresReview: boolean;
-  node: FormFieldNode;
+  node: SerializableFieldCandidate;
 };
 
 export type SavedFieldOverride = {
@@ -147,14 +194,14 @@ export type SiteMappingOverride = {
 
 export type FillOptions = {
   includeReviewFields?: boolean;
-  excludedElementIds?: string[];
+  excludedCandidateIds?: string[];
   siteOverride?: SiteMappingOverride | null;
 };
 
 export type FillWarning = {
   code: string;
   message: string;
-  elementId?: string;
+  candidateId?: string;
 };
 
 export type FillStep =
@@ -225,7 +272,7 @@ export type AutofillErrorCode =
 export type AutofillError = {
   code: AutofillErrorCode;
   message: string;
-  elementId?: string;
+  candidateId?: string;
 };
 
 export type FillResult = {
