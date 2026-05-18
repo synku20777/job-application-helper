@@ -1,4 +1,5 @@
 import { adapterForId } from "@job-helper/adapters";
+import { detectPageActions } from "@job-helper/autofill-core";
 import { detectPlatform } from "@job-helper/dom-utils";
 import type { ExtensionMessage, ExtensionResponse } from "@job-helper/shared";
 
@@ -20,6 +21,7 @@ if (!window.__JOB_AUTOFILL_CONTENT_LOADED__) {
             ok: true,
             type: "SCAN_PAGE",
             fields: await adapter.scan({ document }),
+            pageActions: detectPageActions(document),
             platform: platform.confidence >= initialPlatform.confidence ? platform : initialPlatform,
             url: window.location.href
           } satisfies ExtensionResponse);

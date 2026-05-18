@@ -73,6 +73,14 @@ export const CANONICAL_FIELD_KEYS: CanonicalFieldKey[] = [
 
 export type FieldEvidenceType =
   | "exactAdapterSelector"
+  | "exactLabel"
+  | "ariaLabel"
+  | "autocomplete"
+  | "nameOrId"
+  | "placeholder"
+  | "nearbyText"
+  | "sectionContext"
+  | "negativeLabel"
   | "labelExactMatch"
   | "ariaExactMatch"
   | "nameAttributeMatch"
@@ -98,6 +106,25 @@ export type ElementTarget = {
 export type FieldOption = {
   label: string;
   value: string;
+};
+
+export type SectionType =
+  | "personal"
+  | "experience"
+  | "education"
+  | "skills"
+  | "documents"
+  | "demographics"
+  | "screening"
+  | "unknown";
+
+export type RepeatableGroupType = "experience" | "education" | "certification" | "language" | "reference";
+
+export type RepeatableGroupHint = {
+  id: string;
+  type: RepeatableGroupType;
+  index: number;
+  confidence: number;
 };
 
 export type FieldCandidate = {
@@ -141,9 +168,11 @@ export type FieldCandidate = {
     previousText: string[];
     nextText: string[];
     sectionTitle?: string;
+    sectionType?: SectionType;
     formTitle?: string;
     pageTitle?: string;
     buttonTextsNearby?: string[];
+    repeatableGroup?: RepeatableGroupHint;
   };
   options?: FieldOption[];
   geometry: {
@@ -179,6 +208,7 @@ export type SavedFieldOverride = {
   canonicalKey: CanonicalFieldKey;
   elementSelector?: string;
   label?: string;
+  fieldSignature?: FieldSignature;
   createdAt: string;
   updatedAt: string;
 };
@@ -196,7 +226,11 @@ export type FillOptions = {
   includeReviewFields?: boolean;
   excludedCandidateIds?: string[];
   siteOverride?: SiteMappingOverride | null;
+  localMappingOverrides?: LocalMappingOverride[];
+  siteRecipes?: SiteRecipe[];
 };
+
+export type ExecutionMode = "conservative" | "assisted" | "recorder";
 
 export type FillWarning = {
   code: string;
@@ -255,6 +289,123 @@ export type FillPlan = {
   detectedPlatform: string;
   steps: FillStep[];
   warnings: FillWarning[];
+};
+
+export type StepDiagnostic = {
+  candidateId: string;
+  label: string;
+  canonicalKey?: CanonicalFieldKey;
+  confidence?: number;
+  status: "auto" | "review" | "upload" | "manual" | "skipped";
+  action: FillStep["type"];
+  evidence: MatchEvidence[];
+  sectionType?: SectionType;
+  sectionTitle?: string;
+  repeatableGroup?: RepeatableGroupHint;
+  driver: "nativeText" | "nativeSelect" | "checkbox" | "manual" | "upload";
+};
+
+export type ParserDiagnostics = {
+  scannedElements: number;
+  candidateFields: number;
+  sectionsDetected: number;
+  repeatableGroupsDetected: number;
+  ignoredHiddenElements: number;
+  highConfidenceMatches: number;
+  reviewRequiredMatches: number;
+  manualSteps: number;
+  skippedFields: number;
+  adapterId: string;
+  parserVersion: string;
+  warnings: string[];
+};
+
+export type FillPlanDiagnostics = {
+  parser: ParserDiagnostics;
+  steps: StepDiagnostic[];
+  pageActions?: PageAction[];
+  appliedOverrideIds?: string[];
+  appliedRecipeIds?: string[];
+};
+
+export type InspectionResult = {
+  url: string;
+  platform: PlatformDetection;
+  fields: SerializableFieldCandidate[];
+  matches: FieldMatch[];
+  plan: FillPlan;
+  diagnostics: FillPlanDiagnostics;
+  executionMode: ExecutionMode;
+  acceptedCandidateIds: string[];
+  options?: FillOptions;
+};
+
+export type FieldSignature = {
+  labelText?: string;
+  ariaLabel?: string;
+  placeholder?: string;
+  name?: string;
+  id?: string;
+  inputType?: string;
+  sectionTitle?: string;
+  nearbyTextHash?: string;
+  domPathHint?: string;
+};
+
+export type LocalMappingOverride = {
+  id: string;
+  hostname: string;
+  adapterId: string;
+  urlPattern?: string;
+  fieldSignature: FieldSignature;
+  canonicalKey: CanonicalFieldKey;
+  confidenceBoost: number;
+  createdAt: string;
+  lastUsedAt: string;
+  useCount: number;
+};
+
+export type PageActionType =
+  | "addExperience"
+  | "addEducation"
+  | "addCertification"
+  | "nextStep"
+  | "uploadResume"
+  | "uploadCoverLetter"
+  | "unknown";
+
+export type PageAction = {
+  id: string;
+  type: PageActionType;
+  label: string;
+  selector: string;
+  confidence: number;
+};
+
+export type RecipeFieldSelector = {
+  selector: string;
+  strategy: "css";
+  confidence?: number;
+};
+
+export type RecipeActionSelector = {
+  selector: string;
+  strategy: "css";
+  label?: string;
+  confidence?: number;
+};
+
+export type SiteRecipe = {
+  id: string;
+  label: string;
+  hostnamePattern: string;
+  fields: Partial<Record<CanonicalFieldKey, RecipeFieldSelector[]>>;
+  actions?: Partial<Record<PageActionType, RecipeActionSelector[]>>;
+  semanticHints?: Record<string, unknown>;
+  parserHints?: Record<string, unknown>;
+  notes?: string;
+  createdAt: string;
+  updatedAt: string;
 };
 
 export type AutofillErrorCode =

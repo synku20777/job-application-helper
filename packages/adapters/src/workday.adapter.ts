@@ -1,7 +1,7 @@
-import { buildFillPlanFromMatches, isSensitiveField, matchFields, matchFieldsWithOverrides, normalizeText } from "@job-helper/autofill-core";
-import { executeFillPlan, scanFormFields } from "@job-helper/dom-utils";
-import type { CanonicalFieldKey, FieldMatch, FillStep, FieldCandidate, SerializableFieldCandidate, MatchEvidence } from "@job-helper/shared";
+import { normalizeText } from "@job-helper/autofill-core";
+import type { CanonicalFieldKey, FieldCandidate, SerializableFieldCandidate } from "@job-helper/shared";
 import type { AdapterDetectContext, AtsAdapter } from "./baseAdapter";
+import { buildFillPlanWithAdapter, executeWithAdapter, scanWithAdapter } from "./pipeline";
 
 export type WorkdayPageState = "applicationForm" | "loginAccount" | "reviewSubmit" | "assessmentCaptcha" | "unknown";
 export type WorkdayStepKind = "contact" | "documents" | "experience" | "education" | "questionsDisclosures" | "review" | "unknown";
@@ -43,6 +43,12 @@ const educationFields: Array<{ key: CanonicalFieldKey; patterns: RegExp[] }> = [
   { key: "education.endDate", patterns: [/\bend[_-\s]?date\b/i, /\bgraduation[_-\s]?date\b/i, /\bto\b/i] }
 ];
 
+const workdayFieldBoosts = [
+  ...commonWorkdayFields,
+  ...experienceFields.map((field) => ({ ...field, contextPatterns: [/\b(work experience|employment history|experience)\b/i] })),
+  ...educationFields.map((field) => ({ ...field, contextPatterns: [/\b(education|school|university)\b/i] }))
+];
+
 function isWorkdayHost(hostname: string): boolean {
   return workdayHostPattern.test(hostname.toLowerCase());
 }
@@ -73,64 +79,25 @@ export function detectWorkdayStepKind(document: Document): WorkdayStepKind {
   return "unknown";
 }
 
-function directNodeText(node: SerializableFieldCandidate): string {
-  return [node.id, node.dom.name, node.dom.placeholder, node.accessibility.ariaLabel, node.accessibility.ariaLabelledBy, node.accessibility.label]
-    .filter(Boolean)
-    .join(" ");
-}
-
 function contextText(node: SerializableFieldCandidate): string {
   return [node.context.sectionTitle, node.context.formTitle, ...node.context.nearbyText].filter(Boolean).join(" ");
 }
 
 function nodeSearchText(node: SerializableFieldCandidate): string {
-  return [directNodeText(node), contextText(node), node.dom.selector, ...(node.options ?? [])].filter(Boolean).join(" ");
-}
-
-function firstPatternMatch(node: SerializableFieldCandidate, fields: Array<{ key: CanonicalFieldKey; patterns: RegExp[] }>): CanonicalFieldKey | undefined {
-  const text = directNodeText(node);
-  return fields.find((field) => field.patterns.some((pattern) => pattern.test(text)))?.key;
-}
-
-function workdayExactKey(node: SerializableFieldCandidate): CanonicalFieldKey | undefined {
-  const context = contextText(node);
-  if (/\b(education|school|university)\b/i.test(context)) {
-    const key = firstPatternMatch(node, educationFields);
-    if (key) return key;
-  }
-  if (/\b(work experience|employment history|experience)\b/i.test(context)) {
-    const key = firstPatternMatch(node, experienceFields);
-    if (key) return key;
-  }
-
-  return firstPatternMatch(node, commonWorkdayFields);
-}
-
-function exactMatch(node: SerializableFieldCandidate, canonicalKey: CanonicalFieldKey): FieldMatch {
-  const evidence: MatchEvidence = {
-    type: "exactAdapterSelector",
-    text: node.dom.name ?? node.id ?? node.accessibility.label ?? canonicalKey,
-    weight: 1
-  };
-
-  return {
-    candidateId: node.id,
-    canonicalKey,
-    confidence: 1,
-    evidence: [evidence],
-    adapterId: "workday",
-    fillable: node.geometry.visible && !node.state.disabled,
-    requiresReview: canonicalKey.startsWith("documents.") || isSensitiveField(canonicalKey),
-    node
-  };
-}
-
-function targetFor(node: SerializableFieldCandidate, fallbackLabel: string) {
-  return {
-    candidateId: node.id,
-    selector: node.dom.selector ?? "",
-    label: node.accessibility.label ?? node.accessibility.ariaLabel ?? node.accessibility.ariaLabelledBy ?? node.dom.placeholder ?? node.dom.name ?? fallbackLabel
-  };
+  return [
+    node.id,
+    node.dom.name,
+    node.dom.id,
+    node.dom.placeholder,
+    node.accessibility.ariaLabel,
+    node.accessibility.ariaLabelledBy,
+    node.accessibility.label,
+    contextText(node),
+    node.dom.selector,
+    ...(node.options?.map((option) => option.label) ?? [])
+  ]
+    .filter(Boolean)
+    .join(" ");
 }
 
 function isButtonLike(node: SerializableFieldCandidate): boolean {
@@ -154,17 +121,6 @@ function isManualWorkdayField(node: SerializableFieldCandidate): boolean {
   );
 }
 
-function manualWorkdayStep(node: SerializableFieldCandidate): FillStep {
-  return {
-    type: "manual",
-    target: targetFor(node, "Workday field"),
-    reason: isUnsupportedDynamicWidget(node)
-      ? "Workday custom dropdown requires manual review."
-      : "Workday field requires manual review.",
-    requiresReview: true
-  };
-}
-
 export const workdayAdapter: AtsAdapter = {
   id: "workday",
   label: "Workday",
@@ -180,41 +136,48 @@ export const workdayAdapter: AtsAdapter = {
 
     return { adapterId: "generic-html-form", label: "Generic form", confidence: 0.2 };
   },
-  async scan(context) {
+  getParserHints() {
+    return {
+      dynamicPage: true,
+      waitForMutations: true,
+      scanShadowDom: false,
+      usesCustomComboboxes: true,
+      hasMultiStepFlow: true,
+      mutationWaitMs: 1200
+    };
+  },
+  getDriverHints() {
+    return {
+      preferredComboboxDriver: "ariaComboboxDriver" as const,
+      requiresReactInputSetter: true
+    };
+  },
+  getSemanticHints() {
+    return {
+      fieldBoosts: workdayFieldBoosts,
+      manualField: (field: SerializableFieldCandidate) => {
+        if (!isManualWorkdayField(field)) return undefined;
+        return {
+          reason: isUnsupportedDynamicWidget(field)
+            ? "Workday custom dropdown requires manual review."
+            : "Workday field requires manual review."
+        };
+      }
+    };
+  },
+  postProcessCandidates(candidates: FieldCandidate[], context) {
+    if (!context.document) return candidates;
     const pageState = detectWorkdayPageState(context.document);
     if (pageState === "reviewSubmit" || pageState === "assessmentCaptcha") return [];
-    return scanFormFields(context.document).filter((field) => field.geometry.visible);
+    return candidates.filter((field) => field.geometry.visible);
+  },
+  async scan(context) {
+    return scanWithAdapter(this, context);
   },
   async buildFillPlan(fields, profile, options, url) {
-    const { overrideMatches, remainingFields } = matchFieldsWithOverrides(fields, "workday", options.siteOverride);
-    const manualFields = remainingFields.filter(isManualWorkdayField);
-    const manualElementIds = new Set(manualFields.map((field) => field.id));
-    const matchableFields = remainingFields.filter((field) => !manualElementIds.has(field.id));
-
-    const exactMatches = matchableFields
-      .filter((field) => !isUnsupportedDynamicWidget(field))
-      .map((field) => {
-        const key = workdayExactKey(field);
-        return key ? exactMatch(field, key) : undefined;
-      })
-      .filter((match): match is FieldMatch => Boolean(match));
-
-    const exactElementIds = new Set(exactMatches.map((match) => match.candidateId));
-    const genericMatches = matchFields(
-      matchableFields.filter((field) => !exactElementIds.has(field.id)),
-      "workday",
-      { locales: [profile.meta.locale] }
-    );
-
-    return buildFillPlanFromMatches(
-      [...overrideMatches, ...exactMatches, ...genericMatches],
-      profile,
-      { adapterId: "workday", label: "Workday", confidence: 1 },
-      url,
-      manualFields.map(manualWorkdayStep)
-    );
+    return buildFillPlanWithAdapter(this, fields, profile, options, url);
   },
-  async executeFillPlan(plan, _context, acceptedElementIds) {
-    return executeFillPlan(plan, acceptedElementIds);
+  async executeFillPlan(plan, context, acceptedElementIds) {
+    return executeWithAdapter(this, plan, context, acceptedElementIds);
   }
 };

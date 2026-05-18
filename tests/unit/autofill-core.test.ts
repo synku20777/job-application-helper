@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { buildFillPlan, confidenceBucket, matchField, resolveEffectiveSynonyms, resolveProfileValue } from "@job-helper/autofill-core";
+import {
+  buildFillPlan,
+  classifyFields,
+  confidenceBucket,
+  matchField,
+  matchOption,
+  resolveEffectiveSynonyms,
+  resolveProfileValue
+} from "@job-helper/autofill-core";
 import { sampleProfile } from "@job-helper/profile-schema";
 import type { SerializableFieldCandidate } from "@job-helper/shared";
 
@@ -12,6 +20,9 @@ function node(overrides: {
   sectionTitle?: string;
   formTitle?: string;
   nearbyText?: string[];
+  autocomplete?: string;
+  sectionType?: SerializableFieldCandidate["context"]["sectionType"];
+  options?: SerializableFieldCandidate["options"];
   visible?: boolean;
   disabled?: boolean;
   tagName?: string;
@@ -26,6 +37,7 @@ function node(overrides: {
       type: overrides.type ?? "text",
       id: overrides.id ?? "field-1",
       name: overrides.name,
+      autocomplete: overrides.autocomplete,
       placeholder: overrides.placeholder,
       selector: overrides.selector ?? `#${overrides.id ?? "field-1"}`,
     },
@@ -39,8 +51,13 @@ function node(overrides: {
       previousText: [],
       nextText: [],
       sectionTitle: overrides.sectionTitle,
+      sectionType: overrides.sectionType,
       formTitle: overrides.formTitle,
+      buttonTextsNearby: [],
+      pageTitle: undefined,
+      repeatableGroup: undefined,
     },
+    options: overrides.options,
     geometry: {
       x: 0,
       y: 0,
@@ -94,6 +111,33 @@ describe("autofill core", () => {
     expect(confidenceBucket(0.4, false)).toBe("skip");
   });
 
+  it("prevents bad mappings with negative labels", () => {
+    const match = matchField(node({ label: "Reference First Name", name: "reference_first_name" }));
+    expect(match?.canonicalKey).not.toBe("personal.firstName");
+  });
+
+  it("uses multi-signal scoring for high-confidence semantic matches", () => {
+    const match = matchField(
+      node({
+        id: "fname",
+        label: "Given name",
+        name: "first_name",
+        autocomplete: "given-name",
+        sectionType: "personal",
+        sectionTitle: "Personal information"
+      })
+    );
+
+    expect(match?.canonicalKey).toBe("personal.firstName");
+    expect(match?.confidence).toBe(1);
+    expect(match?.requiresReview).toBe(false);
+  });
+
+  it("skips weak unknown fields below review threshold", () => {
+    const matches = classifyFields([node({ label: "Favorite color", nearbyText: ["Optional preferences"] })]);
+    expect(matches).toHaveLength(0);
+  });
+
   it("always reviews sensitive fields", () => {
     const match = matchField(node({ label: "Gender" }));
     expect(match?.canonicalKey).toBe("demographics.gender");
@@ -121,5 +165,39 @@ describe("autofill core", () => {
     );
     expect(plan.steps).toHaveLength(2);
     expect(plan.steps[0]?.type).toBe("setText");
+  });
+
+  it("matches equivalent select options", () => {
+    expect(matchOption([{ label: "Yes", value: "1" }], "Yes")).toMatchObject({ matched: true, strategy: "exact" });
+    expect(matchOption([{ label: "Prefer not to disclose", value: "decline" }], "decline to answer")).toMatchObject({
+      matched: true,
+      strategy: "synonym"
+    });
+    expect(matchOption([{ label: "Hybrid work", value: "hybrid" }], "Hybrid")).toMatchObject({ matched: true });
+    expect(matchOption([{ label: "On-site", value: "office" }], "onsite")).toMatchObject({ matched: true });
+    expect(matchOption([{ label: "Completely different", value: "x" }], "remote")).toMatchObject({ matched: false, strategy: "manual" });
+  });
+
+  it("uses option matcher when building select steps", () => {
+    const plan = buildFillPlan(
+      [
+        node({
+          id: "remote",
+          selector: "#remote",
+          tagName: "select",
+          label: "Remote preference",
+          sectionType: "screening",
+          options: [
+            { label: "Hybrid work", value: "hybrid-work" },
+            { label: "Office", value: "office" }
+          ]
+        })
+      ],
+      sampleProfile,
+      { adapterId: "generic-html-form", label: "Generic form", confidence: 0.5 },
+      "https://example.test"
+    );
+
+    expect(plan.steps[0]).toMatchObject({ type: "selectOption", value: "hybrid-work" });
   });
 });

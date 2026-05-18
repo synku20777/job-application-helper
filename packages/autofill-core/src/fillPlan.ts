@@ -13,6 +13,7 @@ import { confidenceBucket } from "./confidence";
 import { isSensitiveField } from "./fieldOntology";
 import { matchFields } from "./matcher";
 import { normalizeText } from "./normalize";
+import { matchOption } from "./optionMatcher";
 import { resolveProfileValue } from "./valueResolver";
 
 export function fieldDisplayLabel(node: SerializableFieldCandidate): string {
@@ -110,14 +111,29 @@ export function stepFromMatch(match: FieldMatch, profile: CandidateProfile): Fil
   }
 
   if (match.node.dom.tagName === "select") {
+    const optionMatch = matchOption(match.node.options, value);
+    if (!optionMatch.matched || !optionMatch.option) {
+      return {
+        type: "manual",
+        target,
+        canonicalKey: match.canonicalKey,
+        reason: "Select option needs manual review.",
+        requiresReview: true
+      };
+    }
+
     return {
       type: "selectOption",
       target,
       canonicalKey: match.canonicalKey,
-      value: String(value),
-      optionMatchStrategy: "normalized",
-      confidence: match.confidence,
-      requiresReview: match.requiresReview
+      value: optionMatch.option.value || optionMatch.option.label,
+      optionMatchStrategy: optionMatch.strategy === "normalizedExact" || optionMatch.strategy === "synonym" || optionMatch.strategy === "contains"
+        ? "normalized"
+        : optionMatch.strategy === "fuzzy"
+          ? "fuzzy"
+          : "exact",
+      confidence: Math.min(match.confidence, optionMatch.confidence),
+      requiresReview: match.requiresReview || optionMatch.confidence < 0.9
     };
   }
 

@@ -1,6 +1,16 @@
 import Dexie, { type Table } from "dexie";
 import type { CandidateProfile } from "@job-helper/profile-schema";
-import type { EncryptionStatus, ProfileSummary, ProfileVariant, ProfileVariantSummary, SavedFieldOverride, SiteMappingOverride } from "@job-helper/shared";
+import { hostnameMatchesRecipe, validateSiteRecipe } from "@job-helper/autofill-core";
+import type {
+  EncryptionStatus,
+  LocalMappingOverride,
+  ProfileSummary,
+  ProfileVariant,
+  ProfileVariantSummary,
+  SavedFieldOverride,
+  SiteMappingOverride,
+  SiteRecipe
+} from "@job-helper/shared";
 import {
   decryptProfileWithKey,
   encryptProfileWithKey,
@@ -29,6 +39,8 @@ class JobAutofillDb extends Dexie {
   siteOverrides!: Table<SiteMappingOverride, string>;
   encryptedProfiles!: Table<EncryptedProfileRecord, string>;
   profileVariants!: Table<ProfileVariant, string>;
+  localMappingOverrides!: Table<LocalMappingOverride, string>;
+  siteRecipes!: Table<SiteRecipe, string>;
 
   constructor() {
     super("job-autofill-extension");
@@ -50,6 +62,14 @@ class JobAutofillDb extends Dexie {
       encryptedProfiles: "profileId, label, updatedAt",
       profileVariants: "variantId, baseProfileId, updatedAt"
     });
+    this.version(5).stores({
+      profiles: "profileId, label, updatedAt",
+      siteOverrides: "id, hostname, adapterId, updatedAt",
+      encryptedProfiles: "profileId, label, updatedAt",
+      profileVariants: "variantId, baseProfileId, updatedAt",
+      localMappingOverrides: "id, hostname, adapterId, lastUsedAt",
+      siteRecipes: "id, label, hostnamePattern, updatedAt"
+    });
   }
 }
 
@@ -63,6 +83,10 @@ function overrideStoreId(hostname: string, adapterId: string): string {
 
 function fieldOverrideId(): string {
   return crypto.randomUUID?.() ?? `override-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function localMappingOverrideId(): string {
+  return crypto.randomUUID?.() ?? `local-override-${Date.now()}-${Math.random().toString(36).slice(2)}`;
 }
 
 function sameOverrideTarget(saved: SavedFieldOverride, next: Omit<SavedFieldOverride, "id" | "createdAt" | "updatedAt">): boolean {
@@ -385,9 +409,86 @@ export async function deleteSiteOverride(hostname: string, adapterId: string, ov
   return next;
 }
 
+export async function listLocalMappingOverrides(hostname: string, adapterId: string): Promise<LocalMappingOverride[]> {
+  return db.localMappingOverrides
+    .where("hostname")
+    .equals(hostname.toLowerCase())
+    .filter((override) => override.adapterId === adapterId)
+    .toArray();
+}
+
+export async function saveLocalMappingOverride(
+  override: Omit<LocalMappingOverride, "id" | "createdAt" | "lastUsedAt" | "useCount">
+): Promise<LocalMappingOverride> {
+  const now = new Date().toISOString();
+  const existing = (await listLocalMappingOverrides(override.hostname, override.adapterId)).find((candidate) => {
+    const saved = candidate.fieldSignature;
+    const next = override.fieldSignature;
+    return (
+      (saved.domPathHint && next.domPathHint && saved.domPathHint === next.domPathHint) ||
+      (saved.labelText && next.labelText && saved.labelText.trim().toLowerCase() === next.labelText.trim().toLowerCase())
+    );
+  });
+
+  const next: LocalMappingOverride = {
+    ...override,
+    id: existing?.id ?? localMappingOverrideId(),
+    hostname: override.hostname.toLowerCase(),
+    confidenceBoost: Math.max(0, Math.min(0.3, override.confidenceBoost)),
+    createdAt: existing?.createdAt ?? now,
+    lastUsedAt: now,
+    useCount: (existing?.useCount ?? 0) + 1
+  };
+
+  await db.localMappingOverrides.put(next);
+  return next;
+}
+
+export async function deleteLocalMappingOverride(overrideId: string): Promise<LocalMappingOverride[]> {
+  const existing = await db.localMappingOverrides.get(overrideId);
+  await db.localMappingOverrides.delete(overrideId);
+  return existing ? listLocalMappingOverrides(existing.hostname, existing.adapterId) : db.localMappingOverrides.toArray();
+}
+
+export async function listSiteRecipes(hostname?: string): Promise<SiteRecipe[]> {
+  const recipes = await db.siteRecipes.toArray();
+  return hostname ? recipes.filter((recipe) => hostnameMatchesRecipe(hostname, recipe)) : recipes.sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
+}
+
+export async function importSiteRecipe(
+  recipeInput: Omit<SiteRecipe, "createdAt" | "updatedAt"> & { createdAt?: string; updatedAt?: string }
+): Promise<{ recipe: SiteRecipe; recipes: SiteRecipe[] }> {
+  const valid = validateSiteRecipe(recipeInput);
+  const now = new Date().toISOString();
+  const existing = await db.siteRecipes.get(valid.id);
+  const recipe: SiteRecipe = {
+    ...valid,
+    createdAt: existing?.createdAt ?? valid.createdAt ?? now,
+    updatedAt: now
+  };
+  await db.siteRecipes.put(recipe);
+  return { recipe, recipes: await listSiteRecipes() };
+}
+
+export async function exportSiteRecipes(): Promise<SiteRecipe[]> {
+  return listSiteRecipes();
+}
+
+export async function deleteSiteRecipe(recipeId: string): Promise<SiteRecipe[]> {
+  await db.siteRecipes.delete(recipeId);
+  return listSiteRecipes();
+}
+
 export async function deleteAllData(): Promise<void> {
   const variantProfileIds = Array.from(new Set((await db.profileVariants.toArray()).map((variant) => variant.baseProfileId)));
-  await Promise.all([db.profiles.clear(), db.encryptedProfiles.clear(), db.siteOverrides.clear(), db.profileVariants.clear()]);
+  await Promise.all([
+    db.profiles.clear(),
+    db.encryptedProfiles.clear(),
+    db.siteOverrides.clear(),
+    db.profileVariants.clear(),
+    db.localMappingOverrides.clear(),
+    db.siteRecipes.clear()
+  ]);
   unlockedPassphraseKey = null;
   decryptedProfileCache.clear();
   await chrome.storage.local.remove(["selectedProfileId", "profileEncryptionConfigured"]);

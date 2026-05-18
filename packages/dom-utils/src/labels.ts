@@ -51,11 +51,34 @@ export function getNearbyText(element: HTMLElement): string[] {
   return Array.from(texts).slice(0, 8);
 }
 
+function siblingText(element: HTMLElement, direction: "previous" | "next"): string[] {
+  const texts: string[] = [];
+  let sibling: Element | null = direction === "previous" ? element.previousElementSibling : element.nextElementSibling;
+
+  while (sibling && texts.length < 3) {
+    const text = compactText(sibling.textContent);
+    if (text && text.length <= 160) texts.push(text);
+    sibling = direction === "previous" ? sibling.previousElementSibling : sibling.nextElementSibling;
+  }
+
+  return texts;
+}
+
+export function getPreviousText(element: HTMLElement): string[] {
+  return siblingText(element, "previous");
+}
+
+export function getNextText(element: HTMLElement): string[] {
+  return siblingText(element, "next");
+}
+
 export function getSectionHeading(element: HTMLElement): string | undefined {
   let current: HTMLElement | null = element.parentElement;
 
   for (let depth = 0; current && depth < 5; depth += 1) {
-    const heading = current.querySelector("h1,h2,h3,h4,legend,[role='heading']");
+    const heading = Array.from(current.children).find(
+      (child) => child.matches("h1,h2,h3,h4,legend,[role='heading']") && !child.contains(element)
+    );
     if (heading && !heading.contains(element)) {
       const text = compactText(heading.textContent);
       if (text) return text;

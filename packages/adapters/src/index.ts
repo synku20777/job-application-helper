@@ -2,6 +2,7 @@ export * from "./baseAdapter";
 export * from "./genericHtmlForm.adapter";
 export * from "./greenhouse.adapter";
 export * from "./personio.adapter";
+export * from "./pipeline";
 export * from "./registry";
 export * from "./smartRecruiters.adapter";
 export * from "./stubAdapters";

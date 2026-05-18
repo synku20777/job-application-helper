@@ -31,7 +31,7 @@ export function ensureElementId(element: HTMLElement): string {
 export function queryFillableElements(root: ParentNode = document): HTMLElement[] {
   return Array.from(
     root.querySelectorAll<HTMLElement>(
-      "input, textarea, select, [role='combobox'], [contenteditable='true'], [role='textbox']"
+      "input, textarea, select, [role='combobox'], [role='radio'], [role='checkbox'], [contenteditable='true'], [role='textbox']"
     )
   );
 }

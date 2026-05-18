@@ -1,6 +1,10 @@
-import type { FieldMatch, SerializableFieldCandidate, MatchEvidence } from "@job-helper/shared";
-import { confidenceWeights } from "./confidence";
-import { fieldSynonyms, isSensitiveField } from "./fieldOntology";
+import type { CanonicalFieldKey, FieldMatch, MatchEvidence, SerializableFieldCandidate } from "@job-helper/shared";
+import { confidencePolicy, confidenceWeights } from "./confidence";
+import {
+  canonicalFieldOntology,
+  type CanonicalFieldDefinition,
+  type CanonicalFieldOntology
+} from "./fieldOntology";
 import { resolveEffectiveSynonyms } from "./labelDictionaries";
 import { includesNormalized, normalizeText } from "./normalize";
 
@@ -8,85 +12,191 @@ export type MatchLocaleOptions = {
   locales?: string[];
 };
 
-function evidence(type: MatchEvidence["type"], text: string): MatchEvidence {
-  return { type, text, weight: confidenceWeights[type] };
+export type ClassificationContext = MatchLocaleOptions & {
+  adapterId?: string;
+  ontology?: CanonicalFieldOntology;
+};
+
+export type SemanticFieldMatch = FieldMatch & {
+  sensitive: boolean;
+};
+
+function evidence(type: MatchEvidence["type"], text: string, weight = confidenceWeights[type]): MatchEvidence {
+  return { type, text, weight };
 }
 
-function nodeText(node: SerializableFieldCandidate): string[] {
+function allCandidateText(node: SerializableFieldCandidate): string[] {
   return [
     node.accessibility.label,
     node.accessibility.ariaLabel,
     node.accessibility.ariaLabelledBy,
+    node.accessibility.describedBy,
     node.dom.name,
     node.dom.id,
+    node.dom.autocomplete,
     node.dom.placeholder,
     node.context.sectionTitle,
     node.context.formTitle,
+    node.context.pageTitle,
+    ...node.context.previousText,
+    ...node.context.nextText,
     ...node.context.nearbyText,
-    ...(node.options?.map(opt => opt.label) ?? [])
+    ...(node.context.buttonTextsNearby ?? []),
+    ...(node.options?.map((option) => option.label) ?? [])
   ].filter((text): text is string => Boolean(text));
 }
 
-function bestEvidenceForSynonym(node: SerializableFieldCandidate, synonym: string): MatchEvidence | undefined {
-  if (includesNormalized(node.accessibility.label, synonym)) return evidence("labelExactMatch", node.accessibility.label ?? "");
-  if (includesNormalized(node.accessibility.ariaLabel, synonym) || includesNormalized(node.accessibility.ariaLabelledBy, synonym)) {
-    return evidence("ariaExactMatch", node.accessibility.ariaLabel ?? node.accessibility.ariaLabelledBy ?? "");
-  }
-  if (includesNormalized(node.dom.name, synonym) || includesNormalized(node.dom.id, synonym)) {
-    return evidence("nameAttributeMatch", node.dom.name ?? node.dom.id ?? "");
-  }
-  if (includesNormalized(node.dom.placeholder, synonym)) return evidence("placeholderMatch", node.dom.placeholder ?? "");
-  if (node.context.nearbyText.some((text: string) => includesNormalized(text, synonym))) {
-    return evidence("nearbyTextMatch", node.context.nearbyText.join(" "));
-  }
-  if (includesNormalized(node.context.sectionTitle, synonym) || includesNormalized(node.context.formTitle, synonym)) {
-    return evidence("sectionContextMatch", node.context.sectionTitle ?? node.context.formTitle ?? "");
-  }
-
-  const allText = normalizeText(nodeText(node).join(" "));
-  const words = normalizeText(synonym).split(" ").filter(Boolean);
-  if (words.length > 1 && words.every((word) => allText.includes(word))) {
-    return evidence("fuzzyMatch", allText);
-  }
-
-  return undefined;
+function labelsForDefinition(
+  canonicalKey: CanonicalFieldKey,
+  definition: CanonicalFieldDefinition,
+  context: ClassificationContext
+): string[] {
+  if (!context.locales?.length) return definition.labels;
+  return Array.from(new Set([...definition.labels, ...(resolveEffectiveSynonyms(context.locales)[canonicalKey] ?? [])]));
 }
 
-export function matchField(node: SerializableFieldCandidate, adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch | undefined {
-  let best: FieldMatch | undefined;
-  const synonymsByKey = options.locales?.length ? resolveEffectiveSynonyms(options.locales) : fieldSynonyms;
-
-  for (const [canonicalKey, synonyms] of Object.entries(synonymsByKey)) {
-    const evidences = synonyms
-      .map((synonym) => bestEvidenceForSynonym(node, synonym))
-      .filter(Boolean) as MatchEvidence[];
-
-    if (evidences.length === 0) continue;
-
-    const sorted = evidences.sort((a, b) => b.weight - a.weight);
-    const confidence = sorted[0]?.weight ?? 0;
-    const requiresReview = isSensitiveField(canonicalKey as FieldMatch["canonicalKey"]) || confidence < 0.9;
-
-    const candidate: FieldMatch = {
-      candidateId: node.id,
-      canonicalKey: canonicalKey as FieldMatch["canonicalKey"],
-      confidence,
-      evidence: sorted.slice(0, 3),
-      adapterId,
-      fillable: node.geometry.visible && !node.state.disabled && confidence >= 0.7,
-      requiresReview,
-      node
-    };
-
-    if (!best || candidate.confidence > best.confidence) best = candidate;
-  }
-
-  return best;
+function anyIncludes(source: string | undefined, values: string[]): string | undefined {
+  return values.find((value) => includesNormalized(source, value));
 }
 
-export function matchFields<T extends SerializableFieldCandidate>(nodes: T[], adapterId = "generic-html-form", options: MatchLocaleOptions = {}): FieldMatch[] {
-  return nodes
-    .map((node) => matchField(node, adapterId, options))
-    .filter((match): match is FieldMatch => Boolean(match))
-    .sort((a, b) => b.confidence - a.confidence);
+function autocompleteMatch(node: SerializableFieldCandidate, definition: CanonicalFieldDefinition): string | undefined {
+  const autocomplete = normalizeText(node.dom.autocomplete);
+  if (!autocomplete) return undefined;
+  return definition.autocomplete?.find((candidate) => autocomplete === normalizeText(candidate));
+}
+
+function sectionContextMatch(node: SerializableFieldCandidate, definition: CanonicalFieldDefinition, labels: string[]): string | undefined {
+  if (node.context.sectionType && definition.sectionTypes?.includes(node.context.sectionType)) return node.context.sectionType;
+  return anyIncludes([node.context.sectionTitle, node.context.formTitle].filter(Boolean).join(" "), labels);
+}
+
+function negativeLabelMatch(node: SerializableFieldCandidate, definition: CanonicalFieldDefinition): string | undefined {
+  const negativeLabels = definition.negativeLabels ?? [];
+  if (negativeLabels.length === 0) return undefined;
+  return anyIncludes(allCandidateText(node).join(" "), negativeLabels);
+}
+
+function fuzzyMatch(node: SerializableFieldCandidate, labels: string[]): string | undefined {
+  const text = normalizeText(allCandidateText(node).join(" "));
+  return labels.find((label) => {
+    const words = normalizeText(label).split(" ").filter(Boolean);
+    return words.length > 1 && words.every((word) => text.includes(word));
+  });
+}
+
+export function scoreCandidateMatch(
+  candidate: SerializableFieldCandidate,
+  canonicalKey: CanonicalFieldKey,
+  definition: CanonicalFieldDefinition,
+  context: ClassificationContext = {}
+): SemanticFieldMatch {
+  const labels = labelsForDefinition(canonicalKey, definition, context);
+  const evidenceList: MatchEvidence[] = [];
+  let score = 0;
+
+  const labelMatch = anyIncludes(candidate.accessibility.label, labels);
+  if (labelMatch) {
+    score += confidenceWeights.exactLabel;
+    evidenceList.push(evidence("exactLabel", candidate.accessibility.label ?? labelMatch));
+  }
+
+  const ariaMatch = anyIncludes([candidate.accessibility.ariaLabel, candidate.accessibility.ariaLabelledBy].filter(Boolean).join(" "), labels);
+  if (ariaMatch) {
+    score += confidenceWeights.ariaLabel;
+    evidenceList.push(evidence("ariaLabel", candidate.accessibility.ariaLabel ?? candidate.accessibility.ariaLabelledBy ?? ariaMatch));
+  }
+
+  const autocomplete = autocompleteMatch(candidate, definition);
+  if (autocomplete) {
+    score += confidenceWeights.autocomplete;
+    evidenceList.push(evidence("autocomplete", candidate.dom.autocomplete ?? autocomplete));
+  }
+
+  const nameOrId = anyIncludes([candidate.dom.name, candidate.dom.id].filter(Boolean).join(" "), labels);
+  if (nameOrId) {
+    score += confidenceWeights.nameOrId;
+    evidenceList.push(evidence("nameOrId", candidate.dom.name ?? candidate.dom.id ?? nameOrId));
+  }
+
+  const placeholder = anyIncludes(candidate.dom.placeholder, labels);
+  if (placeholder) {
+    score += confidenceWeights.placeholder;
+    evidenceList.push(evidence("placeholder", candidate.dom.placeholder ?? placeholder));
+  }
+
+  const section = sectionContextMatch(candidate, definition, labels);
+  if (section) {
+    score += confidenceWeights.sectionContext;
+    evidenceList.push(evidence("sectionContext", section));
+  }
+
+  const nearby = anyIncludes([...candidate.context.previousText, ...candidate.context.nextText, ...candidate.context.nearbyText].join(" "), labels);
+  if (nearby) {
+    score += confidenceWeights.nearbyText;
+    evidenceList.push(evidence("nearbyText", nearby));
+  }
+
+  if (evidenceList.length === 0) {
+    const fuzzy = fuzzyMatch(candidate, labels);
+    if (fuzzy) {
+      score += confidenceWeights.fuzzyMatch;
+      evidenceList.push(evidence("fuzzyMatch", fuzzy));
+    }
+  }
+
+  const negative = negativeLabelMatch(candidate, definition);
+  if (negative) {
+    score += confidenceWeights.negativeLabel;
+    evidenceList.push(evidence("negativeLabel", negative));
+  }
+
+  const confidence = Math.max(0, Math.min(1, score));
+  const sensitive = definition.sensitivity === "sensitive";
+
+  return {
+    candidateId: candidate.id,
+    canonicalKey,
+    confidence,
+    evidence: evidenceList.sort((a, b) => b.weight - a.weight).slice(0, 4),
+    adapterId: context.adapterId ?? "generic-html-form",
+    fillable: candidate.geometry.visible && !candidate.state.disabled && confidence >= confidencePolicy.review,
+    requiresReview: confidence < confidencePolicy.autoFill || sensitive,
+    sensitive,
+    node: candidate
+  };
+}
+
+function selectBestMatches(matches: SemanticFieldMatch[]): SemanticFieldMatch[] {
+  const best = matches.sort((a, b) => b.confidence - a.confidence)[0];
+  return best ? [best] : [];
+}
+
+export function classifyFields<T extends SerializableFieldCandidate>(
+  candidates: T[],
+  ontology: CanonicalFieldOntology = canonicalFieldOntology,
+  context: ClassificationContext = {}
+): SemanticFieldMatch[] {
+  return candidates.flatMap((candidate) => {
+    const matches = (Object.entries(ontology) as Array<[CanonicalFieldKey, CanonicalFieldDefinition]>)
+      .map(([canonicalKey, definition]) => scoreCandidateMatch(candidate, canonicalKey, definition, context))
+      .filter((match) => match.confidence >= confidencePolicy.review);
+
+    return selectBestMatches(matches);
+  });
+}
+
+export function matchField(
+  node: SerializableFieldCandidate,
+  adapterId = "generic-html-form",
+  options: MatchLocaleOptions = {}
+): FieldMatch | undefined {
+  return classifyFields([node], canonicalFieldOntology, { ...options, adapterId })[0];
+}
+
+export function matchFields<T extends SerializableFieldCandidate>(
+  nodes: T[],
+  adapterId = "generic-html-form",
+  options: MatchLocaleOptions = {}
+): FieldMatch[] {
+  return classifyFields(nodes, canonicalFieldOntology, { ...options, adapterId }).sort((a, b) => b.confidence - a.confidence);
 }

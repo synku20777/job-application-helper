@@ -1,7 +1,6 @@
-import { buildFillPlanFromMatches, matchFields, matchFieldsWithOverrides } from "@job-helper/autofill-core";
-import { executeFillPlan, scanFormFields } from "@job-helper/dom-utils";
-import type { CanonicalFieldKey, FieldMatch, FillStep, FieldCandidate, SerializableFieldCandidate, MatchEvidence } from "@job-helper/shared";
+import type { CanonicalFieldKey, SerializableFieldCandidate } from "@job-helper/shared";
 import type { AdapterDetectContext, AtsAdapter } from "./baseAdapter";
+import { buildFillPlanWithAdapter, executeWithAdapter, scanWithAdapter } from "./pipeline";
 
 const exactPersonioFields: Array<{ key: CanonicalFieldKey; patterns: RegExp[] }> = [
   { key: "personal.firstName", patterns: [/\bfirst[_-\s]?name\b/i, /\bgiven[_-\s]?name\b/i] },
@@ -36,36 +35,6 @@ function nodeSearchText(node: SerializableFieldCandidate): string {
     .join(" ");
 }
 
-function nodeExactText(node: SerializableFieldCandidate): string {
-  return [node.id, node.dom.name, node.dom.placeholder, node.accessibility.ariaLabel, node.accessibility.ariaLabelledBy, node.accessibility.label]
-    .filter(Boolean)
-    .join(" ");
-}
-
-function personioExactKey(node: SerializableFieldCandidate): CanonicalFieldKey | undefined {
-  const text = nodeExactText(node);
-  return exactPersonioFields.find((field) => field.patterns.some((pattern) => pattern.test(text)))?.key;
-}
-
-function exactMatch(node: SerializableFieldCandidate, canonicalKey: CanonicalFieldKey): FieldMatch {
-  const evidence: MatchEvidence = {
-    type: "exactAdapterSelector",
-    text: node.dom.name ?? node.id ?? node.accessibility.label ?? canonicalKey,
-    weight: 1
-  };
-
-  return {
-    candidateId: node.id,
-    canonicalKey,
-    confidence: 1,
-    evidence: [evidence],
-    adapterId: "personio",
-    fillable: node.geometry.visible && !node.state.disabled,
-    requiresReview: canonicalKey.startsWith("documents."),
-    node
-  };
-}
-
 function isLikelyCustomQuestion(node: SerializableFieldCandidate): boolean {
   if (!node.geometry.visible || node.state.disabled) return false;
   if (node.dom.type === "hidden" || node.dom.type === "submit" || node.dom.type === "button") return false;
@@ -83,19 +52,6 @@ function isLikelyCustomQuestion(node: SerializableFieldCandidate): boolean {
   );
 }
 
-function manualQuestionStep(node: SerializableFieldCandidate): FillStep {
-  return {
-    type: "manual",
-    target: {
-      candidateId: node.id,
-      selector: node.dom.selector ?? "",
-      label: node.accessibility.label ?? node.accessibility.ariaLabel ?? node.dom.placeholder ?? node.dom.name ?? "Personio custom question"
-    },
-    reason: "Personio field requires manual review.",
-    requiresReview: true
-  };
-}
-
 export const personioAdapter: AtsAdapter = {
   id: "personio",
   label: "Personio",
@@ -111,39 +67,21 @@ export const personioAdapter: AtsAdapter = {
 
     return { adapterId: "generic-html-form", label: "Generic form", confidence: 0.2 };
   },
+  getSemanticHints() {
+    return {
+      fieldBoosts: exactPersonioFields,
+      locales: ["de"],
+      manualField: (field: SerializableFieldCandidate) =>
+        isLikelyCustomQuestion(field) ? { reason: "Personio field requires manual review." } : undefined
+    };
+  },
   async scan(context) {
-    return scanFormFields(context.document);
+    return scanWithAdapter(this, context);
   },
   async buildFillPlan(fields, profile, options, url) {
-    const { overrideMatches, remainingFields } = matchFieldsWithOverrides(fields, "personio", options.siteOverride);
-
-    const exactMatches = remainingFields
-      .map((field) => {
-        const key = personioExactKey(field);
-        return key ? exactMatch(field, key) : undefined;
-      })
-      .filter((match): match is FieldMatch => Boolean(match));
-
-    const exactElementIds = new Set(exactMatches.map((match) => match.candidateId));
-    const customQuestionFields = remainingFields.filter((field) => !exactElementIds.has(field.id) && isLikelyCustomQuestion(field));
-    const customQuestionElementIds = new Set(customQuestionFields.map((field) => field.id));
-    const genericMatches = matchFields(
-      remainingFields.filter((field) => !exactElementIds.has(field.id) && !customQuestionElementIds.has(field.id)),
-      "personio",
-      { locales: [profile.meta.locale, "de"] }
-    );
-
-    const manualSteps = customQuestionFields.map(manualQuestionStep);
-
-    return buildFillPlanFromMatches(
-      [...overrideMatches, ...exactMatches, ...genericMatches],
-      profile,
-      { adapterId: "personio", label: "Personio", confidence: 1 },
-      url,
-      manualSteps
-    );
+    return buildFillPlanWithAdapter(this, fields, profile, options, url);
   },
-  async executeFillPlan(plan, _context, acceptedElementIds) {
-    return executeFillPlan(plan, acceptedElementIds);
+  async executeFillPlan(plan, context, acceptedElementIds) {
+    return executeWithAdapter(this, plan, context, acceptedElementIds);
   }
 };

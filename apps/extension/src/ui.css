@@ -42,6 +42,18 @@ select {
   padding: 0 8px;
 }
 
+.readonly-field {
+  display: flex;
+  min-height: 34px;
+  align-items: center;
+  border: 1px solid #e2e8f0;
+  border-radius: 6px;
+  background: #f8fafc;
+  color: #334155;
+  font-size: 12px;
+  padding: 0 8px;
+}
+
 .text-input {
   min-height: 36px;
   min-width: 0;
@@ -337,6 +349,21 @@ small,
 
 .mapping-row select {
   flex: 1;
+}
+
+.evidence-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.evidence-list span {
+  border: 1px solid #dbeafe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #1e3a8a;
+  font-size: 11px;
+  padding: 2px 7px;
 }
 
 .status-pill {

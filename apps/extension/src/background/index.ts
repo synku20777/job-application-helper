@@ -1,19 +1,27 @@
-import { adapterForId, adapters } from "@job-helper/adapters";
-import type { ExtensionMessage, ExtensionResponse, PlatformDetection } from "@job-helper/shared";
+import { adapterForId, adapters, buildInspectionWithAdapter } from "@job-helper/adapters";
+import type { ExtensionMessage, ExtensionResponse, FillPlan, InspectionResult, PlatformDetection } from "@job-helper/shared";
 import { acceptFirstRunConsent, getFirstRunConsent } from "../storage/complianceStore";
+import { getExecutionMode, setExecutionMode } from "../storage/executionModeStore";
 import {
   deleteAllData,
   deleteProfile,
   deleteProfileVariant,
+  deleteLocalMappingOverride,
   deleteSiteOverride,
+  deleteSiteRecipe,
   exportSelectedProfile,
+  exportSiteRecipes,
   getEncryptionStatus,
   getSelectedProfile,
   getSiteOverride,
+  importSiteRecipe,
   isProfileStoreUnlocked,
+  listLocalMappingOverrides,
   listProfileVariants,
   listProfiles,
+  listSiteRecipes,
   lockProfileStore,
+  saveLocalMappingOverride,
   saveProfile,
   saveProfileVariant,
   saveSiteOverride,
@@ -70,6 +78,50 @@ async function activeTabComplianceStatus() {
     url,
     platform: await detectPlatformFromUrl(url),
     permissionState: await hostPermissionState(url)
+  };
+}
+
+function emptyFillPlan(url: string, platform: PlatformDetection, profileId = "copy-only"): FillPlan {
+  return {
+    id: crypto.randomUUID?.() ?? `fill-plan-${Date.now()}`,
+    adapterId: platform.adapterId,
+    url,
+    createdAt: new Date().toISOString(),
+    profileId,
+    detectedPlatform: platform.label,
+    steps: [],
+    warnings: []
+  };
+}
+
+async function copyOnlyInspection(url: string): Promise<InspectionResult> {
+  const mode = await getExecutionMode();
+  const plan = emptyFillPlan(url, linkedInCopyOnlyPlatform);
+  return {
+    url,
+    platform: linkedInCopyOnlyPlatform,
+    fields: [],
+    matches: [],
+    plan,
+    diagnostics: {
+      parser: {
+        scannedElements: 0,
+        candidateFields: 0,
+        sectionsDetected: 0,
+        repeatableGroupsDetected: 0,
+        ignoredHiddenElements: 0,
+        highConfidenceMatches: 0,
+        reviewRequiredMatches: 0,
+        manualSteps: 0,
+        skippedFields: 0,
+        adapterId: linkedInCopyOnlyPlatform.adapterId,
+        parserVersion: "phase-6",
+        warnings: ["LinkedIn is copy-assist only. No page scan or fill plan was generated."]
+      },
+      steps: []
+    },
+    executionMode: mode,
+    acceptedCandidateIds: []
   };
 }
 
@@ -146,6 +198,16 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         return;
       }
 
+      if (message.type === "GET_EXECUTION_MODE") {
+        sendResponse({ ok: true, type: message.type, mode: await getExecutionMode() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "SET_EXECUTION_MODE") {
+        sendResponse({ ok: true, type: message.type, mode: await setExecutionMode(message.mode) } satisfies ExtensionResponse);
+        return;
+      }
+
       if (message.type === "GET_ENCRYPTION_STATUS") {
         sendResponse({ ok: true, type: message.type, status: await getEncryptionStatus() } satisfies ExtensionResponse);
         return;
@@ -203,6 +265,44 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         return;
       }
 
+      if (message.type === "LIST_LOCAL_MAPPING_OVERRIDES") {
+        const overrides = await listLocalMappingOverrides(message.hostname, message.adapterId);
+        sendResponse({ ok: true, type: message.type, overrides } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "SAVE_LOCAL_MAPPING_OVERRIDE") {
+        const override = await saveLocalMappingOverride(message.override);
+        sendResponse({ ok: true, type: message.type, override } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "DELETE_LOCAL_MAPPING_OVERRIDE") {
+        const overrides = await deleteLocalMappingOverride(message.overrideId);
+        sendResponse({ ok: true, type: message.type, overrides } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "LIST_SITE_RECIPES") {
+        sendResponse({ ok: true, type: message.type, recipes: await listSiteRecipes() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "IMPORT_SITE_RECIPE") {
+        sendResponse({ ok: true, type: message.type, ...(await importSiteRecipe(message.recipe)) } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "EXPORT_SITE_RECIPES") {
+        sendResponse({ ok: true, type: message.type, recipes: await exportSiteRecipes() } satisfies ExtensionResponse);
+        return;
+      }
+
+      if (message.type === "DELETE_SITE_RECIPE") {
+        sendResponse({ ok: true, type: message.type, recipes: await deleteSiteRecipe(message.recipeId) } satisfies ExtensionResponse);
+        return;
+      }
+
       if (message.type === "SCAN_PAGE") {
         await requireFirstRunConsent();
         const tab = await activeTab();
@@ -215,6 +315,48 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         return;
       }
 
+      if (message.type === "INSPECT_PAGE") {
+        await requireFirstRunConsent();
+        const tab = await activeTab();
+        const url = tab.url ?? "about:blank";
+        if (isLinkedInUrl(url)) {
+          sendResponse({ ok: true, type: message.type, inspection: await copyOnlyInspection(url) } satisfies ExtensionResponse);
+          return;
+        }
+
+        if (!isProfileStoreUnlocked()) throw new Error("Profile store is locked. Unlock profiles before inspecting a page.");
+        const selectedProfile = await getSelectedProfile();
+        if (!selectedProfile) throw new Error("Select or save a profile before inspecting a page.");
+
+        await ensureHostPermission(url);
+        const scanResponse = await sendToActiveTab({ type: "SCAN_PAGE" });
+        if (!scanResponse.ok) {
+          sendResponse(scanResponse);
+          return;
+        }
+        if (scanResponse.type !== "SCAN_PAGE") throw new Error("Unexpected scan response.");
+
+        const adapter = adapterForId(scanResponse.platform.adapterId);
+        const hostname = hostnameFromUrl(scanResponse.url);
+        const siteOverride = hostname ? await getSiteOverride(hostname, scanResponse.platform.adapterId) : null;
+        const localMappingOverrides = hostname ? await listLocalMappingOverrides(hostname, scanResponse.platform.adapterId) : [];
+        const siteRecipes = hostname ? await listSiteRecipes(hostname) : [];
+        const variant = await selectedProfileVariant(selectedProfile.meta.profileId);
+        const mode = await getExecutionMode();
+        const inspection = await buildInspectionWithAdapter(
+          adapter,
+          scanResponse.fields,
+          applyProfileVariant(selectedProfile, variant),
+          { siteOverride, localMappingOverrides, siteRecipes },
+          scanResponse.url,
+          mode,
+          scanResponse.platform,
+          scanResponse.pageActions
+        );
+        sendResponse({ ok: true, type: message.type, inspection } satisfies ExtensionResponse);
+        return;
+      }
+
       if (message.type === "BUILD_FILL_PLAN") {
         await requireFirstRunConsent();
         if (!isProfileStoreUnlocked()) throw new Error("Profile store is locked. Unlock profiles before building a fill plan.");
@@ -222,7 +364,9 @@ chrome.runtime.onMessage.addListener((message: ExtensionMessage, _sender, sendRe
         const adapter = adapterForId(message.platform.adapterId);
         const hostname = hostnameFromUrl(tab.url);
         const siteOverride = hostname ? await getSiteOverride(hostname, message.platform.adapterId) : null;
-        const options = { siteOverride };
+        const localMappingOverrides = hostname ? await listLocalMappingOverrides(hostname, message.platform.adapterId) : [];
+        const siteRecipes = hostname ? await listSiteRecipes(hostname) : [];
+        const options = { siteOverride, localMappingOverrides, siteRecipes };
         const variant = await selectedProfileVariant(message.profile.meta.profileId);
         const plan = await adapter.buildFillPlan(
           message.fields,

@@ -1,20 +1,24 @@
 import { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { isSensitiveField, stepFromMatch } from "@job-helper/autofill-core";
+import { createLocalMappingOverride, isSensitiveField, stepFromMatch } from "@job-helper/autofill-core";
 import { sampleProfile, safeParseCandidateProfile, type CandidateProfile } from "@job-helper/profile-schema";
 import type {
   ActiveTabComplianceStatus,
   CanonicalFieldKey,
   EncryptionStatus,
+  ExecutionMode,
   ExtensionResponse,
   FillPlan,
   FillStep,
   FirstRunConsentStatus,
+  InspectionResult,
+  LocalMappingOverride,
   SerializableFieldCandidate,
   PlatformDetection,
   ProfileVariant,
   ProfileVariantSummary,
   ProfileSummary,
+  SiteRecipe,
   SiteMappingOverride
 } from "@job-helper/shared";
 import { CANONICAL_FIELD_KEYS } from "@job-helper/shared";
@@ -45,6 +49,12 @@ function selectedAutoSteps(plan: FillPlan | null): string[] {
       .filter((step) => step.type !== "manual" && step.type !== "uploadFile" && !step.requiresReview)
       .map((step) => step.target.candidateId) ?? []
   );
+}
+
+function modeLabel(mode: ExecutionMode): string {
+  if (mode === "assisted") return "Assisted";
+  if (mode === "recorder") return "Recorder";
+  return "Conservative";
 }
 
 function hostnameFromUrl(url: string | undefined): string {
@@ -118,17 +128,24 @@ function App() {
   const [unlockPassphrase, setUnlockPassphrase] = useState("");
   const [consent, setConsent] = useState<FirstRunConsentStatus | null>(null);
   const [activeTabStatus, setActiveTabStatus] = useState<ActiveTabComplianceStatus | null>(null);
+  const [executionMode, setExecutionModeState] = useState<ExecutionMode>("conservative");
   const [scan, setScan] = useState<ScanState | null>(null);
+  const [inspection, setInspection] = useState<InspectionResult | null>(null);
   const [plan, setPlan] = useState<FillPlan | null>(null);
   const [accepted, setAccepted] = useState<Set<string>>(new Set());
   const [mappingDrafts, setMappingDrafts] = useState<Record<string, CanonicalFieldKey>>({});
   const [siteOverride, setSiteOverride] = useState<SiteMappingOverride | null>(null);
+  const [localMappingOverrides, setLocalMappingOverrides] = useState<LocalMappingOverride[]>([]);
+  const [siteRecipes, setSiteRecipes] = useState<SiteRecipe[]>([]);
+  const [recipeJson, setRecipeJson] = useState("");
   const [status, setStatus] = useState<string>("Import or create a profile, then scan the active page.");
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     void refreshConsent();
     void refreshActiveTabStatus();
+    void refreshExecutionMode();
+    void refreshSiteRecipes();
     void refreshEncryptionStatus();
     void refreshProfileSummaries();
     void send({ type: "GET_SELECTED_PROFILE" }).then((response) => {
@@ -189,6 +206,16 @@ function App() {
     if (response.ok && response.type === "GET_ACTIVE_TAB_STATUS") setActiveTabStatus(response.status);
   }
 
+  async function refreshExecutionMode() {
+    const response = await send({ type: "GET_EXECUTION_MODE" });
+    if (response.ok && response.type === "GET_EXECUTION_MODE") setExecutionModeState(response.mode);
+  }
+
+  async function refreshSiteRecipes() {
+    const response = await send({ type: "LIST_SITE_RECIPES" });
+    if (response.ok && response.type === "LIST_SITE_RECIPES") setSiteRecipes(response.recipes);
+  }
+
   function fieldForStep(step: FillStep): SerializableFieldCandidate | undefined {
     return scan?.fields.find((field) => field.id === step.target.candidateId);
   }
@@ -234,19 +261,33 @@ function App() {
 
   const diagnostics = useMemo(() => {
     const hostname = hostnameFromUrl(scan?.url);
+    const parser = inspection?.diagnostics.parser;
     return {
-      adapterId: scan?.platform.adapterId ?? "none",
+      adapterId: parser?.adapterId ?? scan?.platform.adapterId ?? "none",
       hostname: hostname || "unknown",
-      fieldCount: scan?.fields.length ?? 0,
+      scannedElements: parser?.scannedElements ?? scan?.fields.length ?? 0,
+      fieldCount: parser?.candidateFields ?? scan?.fields.length ?? 0,
       stepCount: effectivePlan?.steps.length ?? 0,
-      warningCount: effectivePlan?.warnings.length ?? 0,
+      warningCount: parser?.warnings.length ?? effectivePlan?.warnings.length ?? 0,
+      sectionsDetected: parser?.sectionsDetected ?? 0,
+      repeatableGroupsDetected: parser?.repeatableGroupsDetected ?? 0,
+      highConfidenceMatches: parser?.highConfidenceMatches ?? 0,
+      reviewRequiredMatches: parser?.reviewRequiredMatches ?? 0,
+      manualSteps: parser?.manualSteps ?? 0,
+      skippedFields: parser?.skippedFields ?? 0,
+      parserVersion: parser?.parserVersion ?? "none",
       overrideCount: siteOverride?.fields.length ?? 0,
+      localOverrideCount: localMappingOverrides.length,
+      recipeCount: siteRecipes.length,
+      pageActionCount: inspection?.diagnostics.pageActions?.length ?? 0,
+      appliedOverrideCount: inspection?.diagnostics.appliedOverrideIds?.length ?? 0,
+      appliedRecipeCount: inspection?.diagnostics.appliedRecipeIds?.length ?? 0,
       permissionState: activeTabStatus?.permissionState ?? "unknown",
       restricted: scan?.platform.restricted || activeTabStatus?.platform.restricted ? "yes" : "no",
       copyOnly: scan?.platform.copyOnly || activeTabStatus?.platform.copyOnly ? "yes" : "no",
       variant: activeVariantSummary?.label ?? "none"
     };
-  }, [scan, effectivePlan, siteOverride, activeTabStatus, activeVariantSummary]);
+  }, [scan, inspection, effectivePlan, siteOverride, localMappingOverrides, siteRecipes, activeTabStatus, activeVariantSummary]);
 
   const profileSnippets = useMemo(() => (effectiveProfile ? buildProfileSnippets(effectiveProfile) : []), [effectiveProfile]);
   const resumeDocuments = useMemo(() => documentsByType(profile, "resume"), [profile]);
@@ -255,6 +296,7 @@ function App() {
   function syncProfileEditor(nextProfile: CandidateProfile) {
     setProfile(nextProfile);
     setProfileJson(JSON.stringify(nextProfile, null, 2));
+    setInspection(null);
     setPlan(null);
     setAccepted(new Set());
   }
@@ -295,6 +337,23 @@ function App() {
 
     if (!response.ok) setError(response.error);
     return null;
+  }
+
+  async function loadLocalMappingOverrides(nextScan: ScanState): Promise<LocalMappingOverride[]> {
+    const hostname = hostnameFromUrl(nextScan.url);
+    if (!hostname) {
+      setLocalMappingOverrides([]);
+      return [];
+    }
+
+    const response = await send({ type: "LIST_LOCAL_MAPPING_OVERRIDES", hostname, adapterId: nextScan.platform.adapterId });
+    if (response.ok && response.type === "LIST_LOCAL_MAPPING_OVERRIDES") {
+      setLocalMappingOverrides(response.overrides);
+      return response.overrides;
+    }
+
+    if (!response.ok) setError(response.error);
+    return [];
   }
 
   async function saveProfileFromJson() {
@@ -350,6 +409,7 @@ function App() {
     if (response.ok) {
       setProfile(null);
       setProfileJson(JSON.stringify(sampleProfile, null, 2));
+      setInspection(null);
       setPlan(null);
       setSiteOverride(null);
       setMappingDrafts({});
@@ -371,19 +431,27 @@ function App() {
       return;
     }
     setPlan(null);
+    setInspection(null);
     setMappingDrafts({});
-    const response = await send({ type: "SCAN_PAGE" });
-    if (response.ok && response.type === "SCAN_PAGE") {
+    const response = await send({ type: "INSPECT_PAGE" });
+    if (response.ok && response.type === "INSPECT_PAGE") {
       await refreshActiveTabStatus();
-      const nextScan = { fields: response.fields, platform: response.platform, url: response.url };
+      const nextScan = { fields: response.inspection.fields, platform: response.inspection.platform, url: response.inspection.url };
+      setInspection(response.inspection);
       setScan(nextScan);
-      if (response.platform.copyOnly) {
+      setExecutionModeState(response.inspection.executionMode);
+      setPlan(response.inspection.plan);
+      setSiteOverride(response.inspection.options?.siteOverride ?? null);
+      setLocalMappingOverrides(response.inspection.options?.localMappingOverrides ?? []);
+      setAccepted(new Set(response.inspection.acceptedCandidateIds));
+      if (response.inspection.platform.copyOnly) {
         setSiteOverride(null);
         setStatus("LinkedIn detected. Copy-assist mode is available; automated scanning and filling are disabled.");
         return;
       }
-      const override = await loadSiteOverrides(nextScan);
-      setStatus(`Detected ${response.fields.length} fields on ${response.platform.label}. ${override?.fields.length ?? 0} saved mappings found.`);
+      setStatus(
+        `Inspection ready: ${response.inspection.fields.length} fields, ${response.inspection.plan.steps.length} planned steps, ${modeLabel(response.inspection.executionMode)} mode.`
+      );
     } else if (!response.ok) {
       setError(response.error);
     }
@@ -406,9 +474,21 @@ function App() {
     if (response.ok && response.type === "BUILD_FILL_PLAN") {
       setPlan(response.plan);
       setSiteOverride(response.options?.siteOverride ?? siteOverride);
+      setLocalMappingOverrides(response.options?.localMappingOverrides ?? localMappingOverrides);
       setMappingDrafts({});
       setAccepted(new Set(selectedAutoSteps(response.plan)));
       setStatus("Fill plan ready for review.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function changeExecutionMode(mode: ExecutionMode) {
+    const response = await send({ type: "SET_EXECUTION_MODE", mode });
+    if (response.ok && response.type === "SET_EXECUTION_MODE") {
+      setExecutionModeState(response.mode);
+      setAccepted(new Set(response.mode === "conservative" ? selectedAutoSteps(effectivePlan) : []));
+      setStatus(`${modeLabel(response.mode)} mode selected. Inspect again to rebuild diagnostics with this mode.`);
     } else if (!response.ok) {
       setError(response.error);
     }
@@ -448,8 +528,10 @@ function App() {
     const canonicalKey = stepCanonicalKey(applyDraftToStep(step));
     const hostname = hostnameFromUrl(scan.url);
     if (!canonicalKey || !hostname) return;
+    const field = fieldForStep(step);
+    if (!field) return;
 
-    const response = await send({
+    const legacyResponse = await send({
       type: "SAVE_SITE_OVERRIDE",
       hostname,
       adapterId: scan.platform.adapterId,
@@ -459,10 +541,20 @@ function App() {
         label: step.target.label
       }
     });
+    const localResponse = await send({
+      type: "SAVE_LOCAL_MAPPING_OVERRIDE",
+      override: createLocalMappingOverride({
+        hostname,
+        adapterId: scan.platform.adapterId,
+        field,
+        canonicalKey
+      })
+    });
 
-    if (response.ok && response.type === "SAVE_SITE_OVERRIDE") {
+    if (legacyResponse.ok && legacyResponse.type === "SAVE_SITE_OVERRIDE" && localResponse.ok && localResponse.type === "SAVE_LOCAL_MAPPING_OVERRIDE") {
       const savedStep = applyDraftToStep(step);
-      setSiteOverride(response.override);
+      setSiteOverride(legacyResponse.override);
+      await loadLocalMappingOverrides(scan);
       setPlan((current) =>
         current
           ? {
@@ -477,8 +569,10 @@ function App() {
         return next;
       });
       setStatus("Mapping saved for this site.");
-    } else if (!response.ok) {
-      setError(response.error);
+    } else if (!legacyResponse.ok) {
+      setError(legacyResponse.error);
+    } else if (!localResponse.ok) {
+      setError(localResponse.error);
     }
   }
 
@@ -491,6 +585,46 @@ function App() {
     if (!value) return;
     await navigator.clipboard.writeText(value);
     setStatus(`${label} copied.`);
+  }
+
+  async function importRecipeFromJson() {
+    setError(null);
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(recipeJson);
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : "Invalid recipe JSON.");
+      return;
+    }
+    const response = await send({ type: "IMPORT_SITE_RECIPE", recipe: parsed });
+    if (response.ok && response.type === "IMPORT_SITE_RECIPE") {
+      setSiteRecipes(response.recipes);
+      setRecipeJson(JSON.stringify(response.recipe, null, 2));
+      setStatus("Site recipe imported locally.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function exportRecipesToEditor() {
+    const response = await send({ type: "EXPORT_SITE_RECIPES" });
+    if (response.ok && response.type === "EXPORT_SITE_RECIPES") {
+      setSiteRecipes(response.recipes);
+      setRecipeJson(JSON.stringify(response.recipes, null, 2));
+      setStatus("Site recipes exported to the editor.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
+  }
+
+  async function deleteRecipe(recipeId: string) {
+    const response = await send({ type: "DELETE_SITE_RECIPE", recipeId });
+    if (response.ok && response.type === "DELETE_SITE_RECIPE") {
+      setSiteRecipes(response.recipes);
+      setStatus("Site recipe deleted.");
+    } else if (!response.ok) {
+      setError(response.error);
+    }
   }
 
   async function acceptConsent() {
@@ -758,7 +892,7 @@ function App() {
           <p>{profile?.meta.label ?? selectedProfileSummary?.label ?? "No profile saved"}</p>
         </div>
         <button disabled={!consent?.accepted} onClick={scanPage}>
-          Scan page
+          Inspect page
         </button>
       </header>
 
@@ -1068,12 +1202,29 @@ function App() {
       </section>
 
       <section className="section">
-        <h2>Detected Fields</h2>
+        <h2>Inspect And Review</h2>
+        <div className="document-selector-grid">
+          <label>
+            Execution mode
+            <select value={executionMode} onChange={(event) => changeExecutionMode(event.target.value as ExecutionMode)}>
+              <option value="conservative">Conservative</option>
+              <option value="assisted">Assisted</option>
+              <option value="recorder">Recorder</option>
+            </select>
+          </label>
+          <label>
+            Current result
+            <span className="readonly-field">{inspection ? `${inspection.plan.steps.length} planned steps` : "No inspection yet"}</span>
+          </label>
+        </div>
+        <p className="help-text">
+          Conservative fills only safe high-confidence fields by default. Assisted and Recorder start with fields unselected for manual approval.
+        </p>
         <div className="summary-grid">
           <span>{scan?.platform.label ?? "No scan"}</span>
           <span>{scan?.fields.length ?? 0} fields</span>
           <button disabled={!scan || !profile || isCopyOnly || !encryptionStatus?.unlocked} onClick={buildPlan}>
-            Build fill plan
+            Rebuild fill plan
           </button>
         </div>
         <div className="field-list">
@@ -1118,13 +1269,80 @@ function App() {
         <div className="diagnostics-grid">
           <span>Adapter: {diagnostics.adapterId}</span>
           <span>Host: {diagnostics.hostname}</span>
-          <span>Detected: {diagnostics.fieldCount}</span>
+          <span>Scanned: {diagnostics.scannedElements}</span>
+          <span>Candidates: {diagnostics.fieldCount}</span>
           <span>Planned: {diagnostics.stepCount}</span>
+          <span>Sections: {diagnostics.sectionsDetected}</span>
+          <span>Groups: {diagnostics.repeatableGroupsDetected}</span>
+          <span>High confidence: {diagnostics.highConfidenceMatches}</span>
+          <span>Review matches: {diagnostics.reviewRequiredMatches}</span>
+          <span>Manual: {diagnostics.manualSteps}</span>
+          <span>Skipped: {diagnostics.skippedFields}</span>
           <span>Warnings: {diagnostics.warningCount}</span>
+          <span>Parser: {diagnostics.parserVersion}</span>
           <span>Saved mappings: {diagnostics.overrideCount}</span>
+          <span>Local mappings: {diagnostics.localOverrideCount}</span>
+          <span>Recipes: {diagnostics.recipeCount}</span>
+          <span>Actions: {diagnostics.pageActionCount}</span>
+          <span>Applied overrides: {diagnostics.appliedOverrideCount}</span>
+          <span>Applied recipes: {diagnostics.appliedRecipeCount}</span>
           <span>Permission: {diagnostics.permissionState}</span>
           <span>Restricted: {diagnostics.restricted}</span>
           <span>Copy-only: {diagnostics.copyOnly}</span>
+          <span>Mode: {modeLabel(executionMode)}</span>
+        </div>
+        {inspection?.diagnostics.parser.warnings.length ? (
+          <div className="field-list">
+            {inspection.diagnostics.parser.warnings.map((warning, index) => (
+              <p key={`${warning}-${index}`} className="help-text">
+                {warning}
+              </p>
+            ))}
+          </div>
+        ) : null}
+        {inspection?.diagnostics.pageActions?.length ? (
+          <div className="field-list">
+            {inspection.diagnostics.pageActions.map((action) => (
+              <div key={action.id} className="field-row">
+                <strong>{action.label}</strong>
+                <span>
+                  {action.type} - {Math.round(action.confidence * 100)}%
+                </span>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </section>
+
+      <section className="section">
+        <h2>Site Recipes</h2>
+        <p className="help-text">
+          Recipes are local JSON hints for niche ATS pages. They suggest fields and actions, but never submit or navigate automatically.
+        </p>
+        <div className="field-list">
+          {siteRecipes.map((recipe) => (
+            <div key={recipe.id} className="field-row">
+              <strong>{recipe.label}</strong>
+              <span>{recipe.hostnamePattern}</span>
+              <button className="danger" onClick={() => deleteRecipe(recipe.id)}>
+                Delete
+              </button>
+            </div>
+          ))}
+          {siteRecipes.length === 0 ? <p className="help-text">No site recipes imported.</p> : null}
+        </div>
+        <textarea
+          className="json-editor compact-editor"
+          value={recipeJson}
+          onChange={(event) => setRecipeJson(event.target.value)}
+          spellCheck={false}
+          placeholder='{"id":"example-ats","label":"Example ATS","hostnamePattern":"*.example.com","fields":{"personal.firstName":[{"selector":"#first","strategy":"css"}]}}'
+        />
+        <div className="button-row">
+          <button className="primary" disabled={!recipeJson.trim()} onClick={importRecipeFromJson}>
+            Import recipe
+          </button>
+          <button onClick={exportRecipesToEditor}>Export recipes</button>
         </div>
       </section>
 
@@ -1138,6 +1356,7 @@ function App() {
         <div className="field-list">
           {(effectivePlan?.steps ?? []).map((effectiveStep) => {
             const originalStep = plan?.steps.find((step) => step.target.candidateId === effectiveStep.target.candidateId) ?? effectiveStep;
+            const stepDiagnostic = inspection?.diagnostics.steps.find((step) => step.candidateId === effectiveStep.target.candidateId);
             const currentKey = stepCanonicalKey(effectiveStep);
             const originalKey = stepCanonicalKey(originalStep);
             const draftChanged = Boolean(mappingDrafts[effectiveStep.target.candidateId] && currentKey !== originalKey);
@@ -1164,7 +1383,19 @@ function App() {
                     {currentKey ?? "No mapping"} - {valuePreview(effectiveStep, effectiveProfile)}
                     {"confidence" in effectiveStep ? ` - ${Math.round(effectiveStep.confidence * 100)}%` : ""}
                     {effectiveStep.requiresReview ? " - review required" : ""}
+                    {stepDiagnostic?.driver ? ` - ${stepDiagnostic.driver}` : ""}
+                    {stepDiagnostic?.sectionTitle ? ` - ${stepDiagnostic.sectionTitle}` : ""}
+                    {stepDiagnostic?.repeatableGroup ? ` - ${stepDiagnostic.repeatableGroup.type} #${stepDiagnostic.repeatableGroup.index + 1}` : ""}
                   </small>
+                  {stepDiagnostic?.evidence.length ? (
+                    <div className="evidence-list">
+                      {stepDiagnostic.evidence.map((evidence, index) => (
+                        <span key={`${evidence.type}-${index}`}>
+                          {evidence.type}: {evidence.text} ({Math.round(evidence.weight * 100)})
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                   <div className="mapping-row">
                     <select
                       value={currentKey ?? ""}
